@@ -1,0 +1,261 @@
+syntax = "proto3";
+
+package dvf.orchestrator.v1;
+
+option go_package = "github.com/kartheekbudime/driver-validation-suite/go-orchestrator/proto/orchestratorpb";
+
+import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
+
+// OrchestratorService is the primary API for the Device Validation Framework.
+// It handles test run submission, VM management, device queries, and result retrieval.
+service OrchestratorService {
+
+  // SubmitTestRun queues a new test run for a given device and test suite.
+  rpc SubmitTestRun(SubmitTestRunRequest) returns (SubmitTestRunResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/test-runs"
+      body: "*"
+    };
+  }
+
+  // GetTestRun retrieves details of a specific test run by ID.
+  rpc GetTestRun(GetTestRunRequest) returns (TestRun) {
+    option (google.api.http) = {
+      get: "/api/v1/test-runs/{id}"
+    };
+  }
+
+  // ListTestRuns returns test runs with optional filtering.
+  rpc ListTestRuns(ListTestRunsRequest) returns (ListTestRunsResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/test-runs"
+    };
+  }
+
+  // CancelTestRun cancels a pending or running test run.
+  rpc CancelTestRun(CancelTestRunRequest) returns (CancelTestRunResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/test-runs/{id}/cancel"
+      body: "*"
+    };
+  }
+
+  // GetTestResults retrieves the detailed results of a completed test run.
+  rpc GetTestResults(GetTestResultsRequest) returns (GetTestResultsResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/test-runs/{test_run_id}/results"
+    };
+  }
+
+  // ListVMs returns all virtual machines with optional filtering.
+  rpc ListVMs(ListVMsRequest) returns (ListVMsResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/vms"
+    };
+  }
+
+  // GetVM retrieves details of a specific VM.
+  rpc GetVM(GetVMRequest) returns (VMInstance) {
+    option (google.api.http) = {
+      get: "/api/v1/vms/{id}"
+    };
+  }
+
+  // ListDevices returns all registered devices from the device registry.
+  rpc ListDevices(ListDevicesRequest) returns (ListDevicesResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/devices"
+    };
+  }
+
+  // GetDevice retrieves a specific device from the registry.
+  rpc GetDevice(GetDeviceRequest) returns (DeviceEntry) {
+    option (google.api.http) = {
+      get: "/api/v1/devices/{id}"
+    };
+  }
+
+  // GetHealth returns the health status of the orchestrator and its dependencies.
+  rpc GetHealth(GetHealthRequest) returns (GetHealthResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/health"
+    };
+  }
+}
+
+// --- Enums ---
+
+enum TestRunStatus {
+  TEST_RUN_STATUS_UNSPECIFIED = 0;
+  TEST_RUN_STATUS_PENDING = 1;
+  TEST_RUN_STATUS_QUEUED = 2;
+  TEST_RUN_STATUS_RUNNING = 3;
+  TEST_RUN_STATUS_PASSED = 4;
+  TEST_RUN_STATUS_FAILED = 5;
+  TEST_RUN_STATUS_ERRORED = 6;
+  TEST_RUN_STATUS_CANCELLED = 7;
+  TEST_RUN_STATUS_TIMEOUT = 8;
+}
+
+enum VMStatus {
+  VM_STATUS_UNSPECIFIED = 0;
+  VM_STATUS_CREATING = 1;
+  VM_STATUS_BOOTING = 2;
+  VM_STATUS_READY = 3;
+  VM_STATUS_RUNNING_TEST = 4;
+  VM_STATUS_STOPPING = 5;
+  VM_STATUS_STOPPED = 6;
+  VM_STATUS_ERROR = 7;
+  VM_STATUS_DESTROYED = 8;
+}
+
+// --- Test Runs ---
+
+message SubmitTestRunRequest {
+  string device_id = 1;
+  string test_suite_id = 2;
+  int32 priority = 3;
+  repeated string tags = 4;
+  string requested_by = 5;
+}
+
+message SubmitTestRunResponse {
+  TestRun test_run = 1;
+}
+
+message GetTestRunRequest {
+  string id = 1;
+}
+
+message ListTestRunsRequest {
+  string device_id = 1;
+  TestRunStatus status = 2;
+  int32 limit = 3;
+  int32 offset = 4;
+}
+
+message ListTestRunsResponse {
+  repeated TestRun test_runs = 1;
+  int32 total_count = 2;
+}
+
+message CancelTestRunRequest {
+  string id = 1;
+}
+
+message CancelTestRunResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message TestRun {
+  string id = 1;
+  string device_id = 2;
+  string test_suite_id = 3;
+  TestRunStatus status = 4;
+  string vm_id = 5;
+  int32 priority = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp started_at = 8;
+  google.protobuf.Timestamp completed_at = 9;
+  int64 duration_ms = 10;
+  string requested_by = 11;
+  repeated string tags = 12;
+  string error_message = 13;
+}
+
+// --- Test Results ---
+
+message GetTestResultsRequest {
+  string test_run_id = 1;
+}
+
+message GetTestResultsResponse {
+  repeated TestResult results = 1;
+}
+
+message TestResult {
+  string id = 1;
+  string test_run_id = 2;
+  string test_name = 3;
+  string category = 4;
+  TestRunStatus status = 5;
+  int64 duration_ms = 6;
+  string message = 7;
+  map<string, double> metrics = 8;
+  string logs = 9;
+  google.protobuf.Timestamp completed_at = 10;
+}
+
+// --- VMs ---
+
+message ListVMsRequest {
+  VMStatus status = 1;
+  string device_id = 2;
+}
+
+message ListVMsResponse {
+  repeated VMInstance vms = 1;
+}
+
+message GetVMRequest {
+  string id = 1;
+}
+
+message VMInstance {
+  string id = 1;
+  VMStatus status = 2;
+  string device_id = 3;
+  string qmp_socket_path = 4;
+  repeated string serial_ports = 5;
+  int32 pid = 6;
+  int32 allocated_cpus = 7;
+  int32 allocated_mem_mb = 8;
+  string image_path = 9;
+  google.protobuf.Timestamp created_at = 10;
+  string agent_status = 11;
+  google.protobuf.Timestamp last_heartbeat = 12;
+  string current_test_run_id = 13;
+}
+
+// --- Devices ---
+
+message ListDevicesRequest {}
+
+message ListDevicesResponse {
+  repeated DeviceEntry devices = 1;
+}
+
+message GetDeviceRequest {
+  string id = 1;
+}
+
+message DeviceEntry {
+  string id = 1;
+  string name = 2;
+  string vendor_id = 3;
+  string device_id = 4;
+  string pci_class = 5;
+  string qemu_device_name = 6;
+  string driver_module = 7;
+  string driver_path = 8;
+  string description = 9;
+  repeated string capabilities = 10;
+  repeated string test_suites = 11;
+}
+
+// --- Health ---
+
+message GetHealthRequest {}
+
+message GetHealthResponse {
+  string status = 1; // "healthy", "degraded", "unhealthy"
+  map<string, ComponentHealth> components = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+message ComponentHealth {
+  string status = 1;
+  string message = 2;
+}

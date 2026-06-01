@@ -1,0 +1,53 @@
+{
+  "server": {
+    "grpc_port": 50051,
+    "rest_port": 8080,
+    "host": "0.0.0.0"
+  },
+  "qemu": {
+    "binary_path": "/usr/bin/qemu-system-x86_64",
+    "default_memory_mb": 1024,
+    "default_cpus": 2,
+    "vm_image_dir": "/var/lib/dvf/images",
+    "socket_dir": "/var/run/dvf/qmp",
+    "serial_socket_dir": "/var/run/dvf/serial"
+  },
+  "storage": {
+    "postgres": {
+      "host": "localhost",
+      "port": 5432,
+      "user": "dvf",
+      "password": "dvf_secret",
+      "database": "dvf_validation",
+      "max_connections": 20,
+      "ssl_mode": "disable"
+    },
+    "redis": {
+      "host": "localhost",
+      "port": 6379,
+      "password": "",
+      "db": 0,
+      "pool_size": 10
+    },
+    "object_store": {
+      "endpoint": "localhost:9000",
+      "access_key": "minioadmin",
+      "secret_key": "minioadmin",
+      "bucket": "dvf-artifacts",
+      "use_ssl": false
+    }
+  },
+  "telemetry": {
+    "metrics_port": 9090,
+    "trace_endpoint": "localhost:4317",
+    "log_level": "info",
+    "log_format": "json"
+  },
+  "vm_defaults": {
+    "boot_timeout_seconds": 120,
+    "heartbeat_interval_seconds": 5,
+    "heartbeat_timeout_seconds": 30,
+    "test_timeout_seconds": 600,
+    "max_concurrent_vms": 10
+  }
+}

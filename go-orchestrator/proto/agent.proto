@@ -1,0 +1,80 @@
+syntax = "proto3";
+
+package dvf.agent.v1;
+
+option go_package = "github.com/kartheekbudime/driver-validation-suite/go-orchestrator/proto/agentpb";
+
+import "google/protobuf/timestamp.proto";
+
+// AgentService handles guest agent registration and command dispatch.
+service AgentService {
+
+  // RegisterAgent is called by a guest agent on startup to announce itself.
+  rpc RegisterAgent(RegisterAgentRequest) returns (RegisterAgentResponse);
+
+  // Heartbeat is sent periodically by the agent to report its health.
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+  // GetCommand is polled by the agent to receive the next command from the orchestrator.
+  rpc GetCommand(GetCommandRequest) returns (Command);
+
+  // ReportResult is called by the agent to report the result of a completed command.
+  rpc ReportResult(ReportResultRequest) returns (ReportResultResponse);
+}
+
+message RegisterAgentRequest {
+  string vm_id = 1;
+  string hostname = 2;
+  string os_version = 3;
+  string agent_version = 4;
+  repeated string available_devices = 5; // PCI devices detected
+  google.protobuf.Timestamp timestamp = 6;
+}
+
+message RegisterAgentResponse {
+  string agent_id = 1;
+  int32 heartbeat_interval_seconds = 2;
+  string status = 3;
+}
+
+message HeartbeatRequest {
+  string agent_id = 1;
+  string vm_id = 2;
+  string state = 3; // READY, EXECUTING, REPORTING
+  double cpu_usage_percent = 4;
+  int64 memory_used_bytes = 5;
+  int32 active_test_count = 6;
+  google.protobuf.Timestamp timestamp = 7;
+}
+
+message HeartbeatResponse {
+  string status = 1; // "ok", "shutdown", "reconfigure"
+}
+
+message GetCommandRequest {
+  string agent_id = 1;
+  string vm_id = 2;
+}
+
+message Command {
+  string command_id = 1;
+  string type = 2; // "start_test", "stop_test", "load_driver", "unload_driver", "shutdown"
+  map<string, string> parameters = 3;
+  google.protobuf.Timestamp issued_at = 4;
+}
+
+message ReportResultRequest {
+  string agent_id = 1;
+  string command_id = 2;
+  string test_run_id = 3;
+  string status = 4; // "passed", "failed", "errored"
+  string output = 5; // JSON-encoded test results
+  string logs = 6;
+  int64 duration_ms = 7;
+  google.protobuf.Timestamp timestamp = 8;
+}
+
+message ReportResultResponse {
+  bool acknowledged = 1;
+  string next_action = 2; // "continue", "stop", "shutdown"
+}

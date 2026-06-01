@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package dvf.telemetry.v1;
+
+option go_package = "github.com/kartheekbudime/driver-validation-suite/go-orchestrator/proto/telemetrypb";
+
+import "google/protobuf/timestamp.proto";
+
+// TelemetryService handles real-time telemetry streaming from guest agents.
+service TelemetryService {
+
+  // StreamLogs receives a stream of log entries from a guest agent.
+  rpc StreamLogs(stream LogEntry) returns (StreamAck);
+
+  // StreamMetrics receives a stream of metric data points from a guest agent.
+  rpc StreamMetrics(stream MetricEntry) returns (StreamAck);
+
+  // StreamEvents receives structured events from a guest agent.
+  rpc StreamEvents(stream EventEntry) returns (StreamAck);
+}
+
+message LogEntry {
+  string vm_id = 1;
+  string agent_id = 2;
+  string severity = 3; // DEBUG, INFO, WARN, ERROR
+  string source = 4;   // component name
+  string message = 5;
+  map<string, string> fields = 6;
+  google.protobuf.Timestamp timestamp = 7;
+}
+
+message MetricEntry {
+  string vm_id = 1;
+  string agent_id = 2;
+  string name = 3;
+  double value = 4;
+  map<string, string> labels = 5;
+  google.protobuf.Timestamp timestamp = 6;
+}
+
+message EventEntry {
+  string vm_id = 1;
+  string agent_id = 2;
+  string event_type = 3; // "test_started", "test_completed", "driver_loaded", etc.
+  string payload = 4;    // JSON-encoded event data
+  google.protobuf.Timestamp timestamp = 5;
+}
+
+message StreamAck {
+  int64 received_count = 1;
+  string status = 2;
+}

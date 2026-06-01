@@ -1,0 +1,65 @@
+{
+  "devices": [
+    {
+      "id": "dvf-gpu",
+      "name": "DVF GPU Accelerator",
+      "vendor_id": "0xDEF0",
+      "device_id": "0x0001",
+      "pci_class": "0x0302",
+      "qemu_device_name": "dvf-gpu",
+      "driver_module": "dvf_gpu",
+      "driver_path": "driver-source/gpu_driver/dvf_gpu.ko",
+      "description": "Custom GPU accelerator with compute, DMA, and interrupt capabilities",
+      "capabilities": [
+        "mmio",
+        "msi_interrupts",
+        "dma",
+        "compute",
+        "error_injection"
+      ],
+      "bar_layout": {
+        "bar0": {
+          "type": "memory",
+          "size_bytes": 65536,
+          "description": "Register + scratchpad memory space"
+        }
+      },
+      "test_suites": [
+        "smoke/gpu_basic",
+        "regression/gpu_dma",
+        "regression/gpu_interrupts",
+        "stress/gpu_compute"
+      ]
+    },
+    {
+      "id": "dvf-ai-accel",
+      "name": "DVF AI Accelerator",
+      "vendor_id": "0xDEF0",
+      "device_id": "0x0002",
+      "pci_class": "0x1200",
+      "qemu_device_name": "dvf-ai-accel",
+      "driver_module": "dvf_ai",
+      "driver_path": "driver-source/ai_driver/dvf_ai.ko",
+      "description": "AI inference accelerator with tensor operations and DMA",
+      "capabilities": [
+        "mmio",
+        "msi_interrupts",
+        "dma",
+        "tensor_ops",
+        "error_injection"
+      ],
+      "bar_layout": {
+        "bar0": {
+          "type": "memory",
+          "size_bytes": 16384,
+          "description": "Register space"
+        }
+      },
+      "test_suites": [
+        "smoke/ai_basic",
+        "regression/ai_tensor_ops",
+        "stress/ai_inference"
+      ]
+    }
+  ]
+}
