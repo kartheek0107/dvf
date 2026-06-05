@@ -1,0 +1,296 @@
+{
+  "timestamp": "2026-06-05T10:27:21.499554+05:30",
+  "device": "gpgpu",
+  "driver": "gpgpu_driver",
+  "status": "FAILED",
+  "total_tests": 31,
+  "passed": 29,
+  "failed": 2,
+  "duration_seconds": 15.16,
+  "suites": [
+    {
+      "suite": "error_injection::test_boundaries",
+      "binary": "error_injection/test_boundaries",
+      "exit_code": 1,
+      "raw_output": "\u001b[?2004l\n=== Test Suite: error_injection/boundaries ===\nrunning: test_device_exists ... PASS (0.4ms)\nrunning: test_read_beyond_bar ... PASS (0.9ms)\nrunning: test_write_beyond_bar ... PASS (0.3ms)\nrunning: test_read_large_offset ... PASS (0.2ms)\nrunning: test_zero_length_read ... FAIL (1.6ms): ASSERT_EQ failed at error_injection/test_boundaries.c:80: got 0x4, expected 0x0 \u2014 zero-length read should return 0\nrunning: test_zero_length_write ... FAIL (0.3ms): ASSERT_EQ failed at error_injection/test_boundaries.c:93: got 0x4, expected 0x0 \u2014 zero-length write should return 0\n{\"suite\": \"error_injection/boundaries\", \"results\": [\n{\"test\": \"test_device_exists\", \"status\": \"PASS\", \"duration_ms\": 0.37, \"message\": \"\"},\n{\"test\": \"test_read_beyond_bar\", \"status\": \"PASS\", \"duration_ms\": 0.89, \"message\": \"\"},\n{\"test\": \"test_write_beyond_bar\", \"status\": \"PASS\", \"duration_ms\": 0.30, \"message\": \"\"},\n{\"test\": \"test_read_large_offset\", \"status\": \"PASS\", \"duration_ms\": 0.19, \"message\": \"\"},\n{\"test\": \"test_zero_length_read\", \"status\": \"FAIL\", \"duration_ms\": 1.57, \"message\": \"ASSERT_EQ failed at error_injection/test_boundaries.c:80: got 0x4, expected 0x0 \u2014 zero-length read should return 0\"},\n{\"test\": \"test_zero_length_write\", \"status\": \"FAIL\", \"duration_ms\": 0.29, \"message\": \"ASSERT_EQ failed at error_injection/test_boundaries.c:93: got 0x4, expected 0x0 \u2014 zero-length write should return 0\"}\n], \"summary\": {\"total\": 6, \"passed\": 4, \"failed\": 2, \"duration_ms\": 3.61}}\n--- error_injection/boundaries: 4/6 passed (2 FAILED) [3.6ms] ---",
+      "results": [
+        {
+          "test": "test_device_exists",
+          "status": "PASS",
+          "duration_ms": 0.37,
+          "message": ""
+        },
+        {
+          "test": "test_read_beyond_bar",
+          "status": "PASS",
+          "duration_ms": 0.89,
+          "message": ""
+        },
+        {
+          "test": "test_write_beyond_bar",
+          "status": "PASS",
+          "duration_ms": 0.3,
+          "message": ""
+        },
+        {
+          "test": "test_read_large_offset",
+          "status": "PASS",
+          "duration_ms": 0.19,
+          "message": ""
+        },
+        {
+          "test": "test_zero_length_read",
+          "status": "FAIL",
+          "duration_ms": 1.57,
+          "message": "ASSERT_EQ failed at error_injection/test_boundaries.c:80: got 0x4, expected 0x0 \u2014 zero-length read should return 0"
+        },
+        {
+          "test": "test_zero_length_write",
+          "status": "FAIL",
+          "duration_ms": 0.29,
+          "message": "ASSERT_EQ failed at error_injection/test_boundaries.c:93: got 0x4, expected 0x0 \u2014 zero-length write should return 0"
+        }
+      ],
+      "summary": {
+        "total": 6,
+        "passed": 4,
+        "failed": 2,
+        "duration_ms": 3.61
+      }
+    },
+    {
+      "suite": "read_write::test_register_rw",
+      "binary": "read_write/test_register_rw",
+      "exit_code": 0,
+      "raw_output": "\u001b[?2004l\n=== Test Suite: read_write/register_rw ===\nrunning: test_write_read_register_0 ... PASS (2.3ms)\nrunning: test_write_read_max_value ... PASS (1.0ms)\nrunning: test_write_read_zero ... PASS (0.3ms)\nrunning: test_write_read_known_patterns ... PASS (0.2ms)\nrunning: test_sequential_registers ... PASS (0.3ms)\nrunning: test_register_independence ... PASS (0.3ms)\n{\"suite\": \"read_write/register_rw\", \"results\": [\n{\"test\": \"test_write_read_register_0\", \"status\": \"PASS\", \"duration_ms\": 2.26, \"message\": \"\"},\n{\"test\": \"test_write_read_max_value\", \"status\": \"PASS\", \"duration_ms\": 1.02, \"message\": \"\"},\n{\"test\": \"test_write_read_zero\", \"status\": \"PASS\", \"duration_ms\": 0.28, \"message\": \"\"},\n{\"test\": \"test_write_read_known_patterns\", \"status\": \"PASS\", \"duration_ms\": 0.23, \"message\": \"\"},\n{\"test\": \"test_sequential_registers\", \"status\": \"PASS\", \"duration_ms\": 0.27, \"message\": \"\"},\n{\"test\": \"test_register_independence\", \"status\": \"PASS\", \"duration_ms\": 0.29, \"message\": \"\"}\n], \"summary\": {\"total\": 6, \"passed\": 6, \"failed\": 0, \"duration_ms\": 4.34}}\n--- read_write/register_rw: 6/6 passed [4.3ms] ---",
+      "results": [
+        {
+          "test": "test_write_read_register_0",
+          "status": "PASS",
+          "duration_ms": 2.26,
+          "message": ""
+        },
+        {
+          "test": "test_write_read_max_value",
+          "status": "PASS",
+          "duration_ms": 1.02,
+          "message": ""
+        },
+        {
+          "test": "test_write_read_zero",
+          "status": "PASS",
+          "duration_ms": 0.28,
+          "message": ""
+        },
+        {
+          "test": "test_write_read_known_patterns",
+          "status": "PASS",
+          "duration_ms": 0.23,
+          "message": ""
+        },
+        {
+          "test": "test_sequential_registers",
+          "status": "PASS",
+          "duration_ms": 0.27,
+          "message": ""
+        },
+        {
+          "test": "test_register_independence",
+          "status": "PASS",
+          "duration_ms": 0.29,
+          "message": ""
+        }
+      ],
+      "summary": {
+        "total": 6,
+        "passed": 6,
+        "failed": 0,
+        "duration_ms": 4.34
+      }
+    },
+    {
+      "suite": "read_write::test_offset_sweep",
+      "binary": "read_write/test_offset_sweep",
+      "exit_code": 0,
+      "raw_output": "\u001b[?2004l\n=== Test Suite: read_write/offset_sweep ===\nrunning: test_all_registers ... PASS (2.0ms)\nrunning: test_reverse_sweep ... PASS (1.3ms)\nrunning: test_last_valid_register ... PASS (0.3ms)\nrunning: test_boundary_offset_read ... PASS (0.2ms)\nrunning: test_boundary_offset_write ... PASS (0.1ms)\n{\"suite\": \"read_write/offset_sweep\", \"results\": [\n{\"test\": \"test_all_registers\", \"status\": \"PASS\", \"duration_ms\": 1.99, \"message\": \"\"},\n{\"test\": \"test_reverse_sweep\", \"status\": \"PASS\", \"duration_ms\": 1.34, \"message\": \"\"},\n{\"test\": \"test_last_valid_register\", \"status\": \"PASS\", \"duration_ms\": 0.28, \"message\": \"\"},\n{\"test\": \"test_boundary_offset_read\", \"status\": \"PASS\", \"duration_ms\": 0.15, \"message\": \"\"},\n{\"test\": \"test_boundary_offset_write\", \"status\": \"PASS\", \"duration_ms\": 0.14, \"message\": \"\"}\n], \"summary\": {\"total\": 5, \"passed\": 5, \"failed\": 0, \"duration_ms\": 3.90}}\n--- read_write/offset_sweep: 5/5 passed [3.9ms] ---",
+      "results": [
+        {
+          "test": "test_all_registers",
+          "status": "PASS",
+          "duration_ms": 1.99,
+          "message": ""
+        },
+        {
+          "test": "test_reverse_sweep",
+          "status": "PASS",
+          "duration_ms": 1.34,
+          "message": ""
+        },
+        {
+          "test": "test_last_valid_register",
+          "status": "PASS",
+          "duration_ms": 0.28,
+          "message": ""
+        },
+        {
+          "test": "test_boundary_offset_read",
+          "status": "PASS",
+          "duration_ms": 0.15,
+          "message": ""
+        },
+        {
+          "test": "test_boundary_offset_write",
+          "status": "PASS",
+          "duration_ms": 0.14,
+          "message": ""
+        }
+      ],
+      "summary": {
+        "total": 5,
+        "passed": 5,
+        "failed": 0,
+        "duration_ms": 3.9
+      }
+    },
+    {
+      "suite": "data_integrity::test_patterns",
+      "binary": "data_integrity/test_patterns",
+      "exit_code": 0,
+      "raw_output": "\u001b[?2004l\n=== Test Suite: data_integrity/patterns ===\nrunning: test_walking_ones ... PASS (0.9ms)\nrunning: test_walking_zeros ... PASS (0.3ms)\nrunning: test_alternating_pattern ... PASS (0.4ms)\nrunning: test_checkerboard ... PASS (0.5ms)\nrunning: test_walking_ones_all_regs ... PASS (0.3ms)\n{\"suite\": \"data_integrity/patterns\", \"results\": [\n{\"test\": \"test_walking_ones\", \"status\": \"PASS\", \"duration_ms\": 0.91, \"message\": \"\"},\n{\"test\": \"test_walking_zeros\", \"status\": \"PASS\", \"duration_ms\": 0.33, \"message\": \"\"},\n{\"test\": \"test_alternating_pattern\", \"status\": \"PASS\", \"duration_ms\": 0.38, \"message\": \"\"},\n{\"test\": \"test_checkerboard\", \"status\": \"PASS\", \"duration_ms\": 0.52, \"message\": \"\"},\n{\"test\": \"test_walking_ones_all_regs\", \"status\": \"PASS\", \"duration_ms\": 0.33, \"message\": \"\"}\n], \"summary\": {\"total\": 5, \"passed\": 5, \"failed\": 0, \"duration_ms\": 2.47}}\n--- data_integrity/patterns: 5/5 passed [2.5ms] ---",
+      "results": [
+        {
+          "test": "test_walking_ones",
+          "status": "PASS",
+          "duration_ms": 0.91,
+          "message": ""
+        },
+        {
+          "test": "test_walking_zeros",
+          "status": "PASS",
+          "duration_ms": 0.33,
+          "message": ""
+        },
+        {
+          "test": "test_alternating_pattern",
+          "status": "PASS",
+          "duration_ms": 0.38,
+          "message": ""
+        },
+        {
+          "test": "test_checkerboard",
+          "status": "PASS",
+          "duration_ms": 0.52,
+          "message": ""
+        },
+        {
+          "test": "test_walking_ones_all_regs",
+          "status": "PASS",
+          "duration_ms": 0.33,
+          "message": ""
+        }
+      ],
+      "summary": {
+        "total": 5,
+        "passed": 5,
+        "failed": 0,
+        "duration_ms": 2.47
+      }
+    },
+    {
+      "suite": "data_integrity::test_persistence",
+      "binary": "data_integrity/test_persistence",
+      "exit_code": 0,
+      "raw_output": "\u001b[?2004l\n=== Test Suite: data_integrity/persistence ===\nrunning: test_value_persists_across_close ... PASS (1.2ms)\nrunning: test_multi_fd_visibility ... PASS (0.6ms)\nrunning: test_multiple_registers_persist ... PASS (0.4ms)\n{\"suite\": \"data_integrity/persistence\", \"results\": [\n{\"test\": \"test_value_persists_across_close\", \"status\": \"PASS\", \"duration_ms\": 1.16, \"message\": \"\"},\n{\"test\": \"test_multi_fd_visibility\", \"status\": \"PASS\", \"duration_ms\": 0.57, \"message\": \"\"},\n{\"test\": \"test_multiple_registers_persist\", \"status\": \"PASS\", \"duration_ms\": 0.43, \"message\": \"\"}\n], \"summary\": {\"total\": 3, \"passed\": 3, \"failed\": 0, \"duration_ms\": 2.16}}\n--- data_integrity/persistence: 3/3 passed [2.2ms] ---",
+      "results": [
+        {
+          "test": "test_value_persists_across_close",
+          "status": "PASS",
+          "duration_ms": 1.16,
+          "message": ""
+        },
+        {
+          "test": "test_multi_fd_visibility",
+          "status": "PASS",
+          "duration_ms": 0.57,
+          "message": ""
+        },
+        {
+          "test": "test_multiple_registers_persist",
+          "status": "PASS",
+          "duration_ms": 0.43,
+          "message": ""
+        }
+      ],
+      "summary": {
+        "total": 3,
+        "passed": 3,
+        "failed": 0,
+        "duration_ms": 2.16
+      }
+    },
+    {
+      "suite": "concurrency::test_concurrent_rw",
+      "binary": "concurrency/test_concurrent_rw",
+      "exit_code": 0,
+      "raw_output": "\u001b[?2004l\n=== Test Suite: concurrency/concurrent_rw ===\nrunning: test_writer_reader_race ... PASS (1012.3ms)\nrunning: test_multi_writer ... PASS (37.1ms)\nrunning: test_multi_register_concurrent ... PASS (37.6ms)\n{\"suite\": \"concurrency/concurrent_rw\", \"results\": [\n{\"test\": \"test_writer_reader_race\", \"status\": \"PASS\", \"duration_ms\": 1012.33, \"message\": \"\"},\n{\"test\": \"test_multi_writer\", \"status\": \"PASS\", \"duration_ms\": 37.10, \"message\": \"\"},\n{\"test\": \"test_multi_register_concurrent\", \"status\": \"PASS\", \"duration_ms\": 37.58, \"message\": \"\"}\n], \"summary\": {\"total\": 3, \"passed\": 3, \"failed\": 0, \"duration_ms\": 1087.02}}\n--- concurrency/concurrent_rw: 3/3 passed [1087.0ms] ---",
+      "results": [
+        {
+          "test": "test_writer_reader_race",
+          "status": "PASS",
+          "duration_ms": 1012.33,
+          "message": ""
+        },
+        {
+          "test": "test_multi_writer",
+          "status": "PASS",
+          "duration_ms": 37.1,
+          "message": ""
+        },
+        {
+          "test": "test_multi_register_concurrent",
+          "status": "PASS",
+          "duration_ms": 37.58,
+          "message": ""
+        }
+      ],
+      "summary": {
+        "total": 3,
+        "passed": 3,
+        "failed": 0,
+        "duration_ms": 1087.02
+      }
+    },
+    {
+      "suite": "stress_performance::test_throughput",
+      "binary": "stress_performance/test_throughput",
+      "exit_code": 0,
+      "raw_output": "\u001b[?2004l\n=== Test Suite: stress_performance/throughput ===\nrunning: test_write_throughput ...     write throughput: 323896 ops/sec (30.9ms for 10000 ops)\nPASS (35.7ms)\nrunning: test_read_throughput ...     read throughput: 310529 ops/sec (32.2ms for 10000 ops)\nPASS (32.7ms)\nrunning: test_sustained_load ...     sustained: 670000 writes + 670000 reads in 3003.4ms = 446155 ops/sec\nPASS (3004.0ms)\n{\"suite\": \"stress_performance/throughput\", \"results\": [\n{\"test\": \"test_write_throughput\", \"status\": \"PASS\", \"duration_ms\": 35.70, \"message\": \"\"},\n{\"test\": \"test_read_throughput\", \"status\": \"PASS\", \"duration_ms\": 32.72, \"message\": \"\"},\n{\"test\": \"test_sustained_load\", \"status\": \"PASS\", \"duration_ms\": 3004.01, \"message\": \"\"}\n], \"summary\": {\"total\": 3, \"passed\": 3, \"failed\": 0, \"duration_ms\": 3072.43}}\n--- stress_performance/throughput: 3/3 passed [3072.4ms] ---",
+      "results": [
+        {
+          "test": "test_write_throughput",
+          "status": "PASS",
+          "duration_ms": 35.7,
+          "message": ""
+        },
+        {
+          "test": "test_read_throughput",
+          "status": "PASS",
+          "duration_ms": 32.72,
+          "message": ""
+        },
+        {
+          "test": "test_sustained_load",
+          "status": "PASS",
+          "duration_ms": 3004.01,
+          "message": ""
+        }
+      ],
+      "summary": {
+        "total": 3,
+        "passed": 3,
+        "failed": 0,
+        "duration_ms": 3072.43
+      }
+    }
+  ]
+}

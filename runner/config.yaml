@@ -1,0 +1,68 @@
+# DVF Local Runner Configuration
+#
+# This config tells the runner where to find your QEMU, kernel, rootfs,
+# and how to interact with the guest VM.
+
+qemu:
+  # Path to your custom QEMU binary (with gpgpu device compiled in)
+  binary: /home/kartheekbudime/VirtualMachines/qemu_bin/bin/qemu-system-x86_64
+
+  # Path to the Linux kernel bzImage
+  kernel: /home/kartheekbudime/VirtualMachines/linux/arch/x86/boot/bzImage
+
+  # Path to the root filesystem image
+  rootfs: /home/kartheekbudime/qemu-rootfs/rootfs.ext4
+
+  # Memory and CPU allocation
+  memory_mb: 1024
+  cpus: 2
+
+  # 9p shared directory (mounted inside guest as /mnt/share)
+  share_dir: /home/kartheekbudime/qemu-rootfs/share
+
+  # Guest mount point for the 9p share
+  guest_mount: /mnt/share
+
+  # QEMU device name for your custom PCI device
+  device_name: gp_gpu
+
+  # Boot timeout — how long to wait for the guest to boot (seconds)
+  boot_timeout: 120
+
+  # Extra QEMU flags (appended to the command line)
+  extra_flags: ""
+
+driver:
+  # Kernel module filename (relative to share_dir)
+  ko_file: gpgpu_driver.ko
+
+  # Module name (for lsmod/rmmod)
+  module_name: gpgpu_driver
+
+  # Device node created by the driver
+  device_node: /dev/gpgpu
+
+tests:
+  # Directory where test binaries are installed (relative to share_dir)
+  test_dir: dvf_tests
+
+  # Ordered list of test suites to run
+  # Each entry is a path relative to test_dir
+  suites:
+    - error_injection/test_boundaries
+    - read_write/test_register_rw
+    - read_write/test_offset_sweep
+    - data_integrity/test_patterns
+    - data_integrity/test_persistence
+    - concurrency/test_concurrent_rw
+    - stress_performance/test_throughput
+
+  # Per-test timeout in seconds
+  test_timeout: 60
+
+output:
+  # Where to write the JSON results file
+  results_file: results/run_results.json
+
+  # Enable verbose output
+  verbose: true
