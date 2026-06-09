@@ -2,18 +2,14 @@
 """
 DVF Local Runner — Orchestrates a full driver validation test run.
 
-Workflow:
-  1. Build C test binaries (make -C c-test-binaries)
-  2. Install binaries to the 9p shared folder
-  3. Launch QEMU with the custom kernel, rootfs, and gpgpu device
-  4. Wait for guest boot (serial console monitoring)
-  5. Load the driver module (insmod)
-  6. Run each test binary and capture JSON results
-  7. Generate a structured report
-  8. Shutdown QEMU
+Supports three target modes:
+  - qemu   : Boot QEMU with a custom emulated device (default)
+  - fpga   : Run tests natively on the host against a physical FPGA
+  - hybrid : Boot QEMU with the FPGA passed through via VFIO-PCI
 
 Usage:
-  python3 runner/local_runner.py                  # run all suites
+  python3 runner/local_runner.py                  # run all suites (qemu mode)
+  python3 runner/local_runner.py --target fpga    # run against FPGA hardware
   python3 runner/local_runner.py --suite smoke     # run only smoke tests
   python3 runner/local_runner.py --build-only      # just build, don't run
   python3 runner/local_runner.py --skip-build      # skip build step
@@ -120,9 +116,31 @@ def build_tests(cfg: dict) -> bool:
 # Step 2: Build QEMU command line
 # ---------------------------------------------------------------------------
 
+def get_device_env(cfg: dict) -> dict:
+    """Build DVF_* environment variables for test binaries based on target mode."""
+    target = cfg.get("target_mode", "qemu")
+    env = {}
+
+    if target in ("fpga", "hybrid"):
+        fpga = cfg.get("fpga", {})
+        fpga_drv = cfg.get("fpga_driver", cfg["driver"])
+        env["DVF_DEVICE_PATH"] = fpga_drv.get("device_node", fpga.get("device_node", "/dev/fpga0"))
+        env["DVF_REG_COUNT"] = str(fpga.get("reg_count", 256))
+        env["DVF_REG_SIZE"] = str(fpga.get("reg_size", 4))
+        env["DVF_BAR_SIZE"] = str(fpga.get("bar_size", 1024))
+    else:
+        env["DVF_DEVICE_PATH"] = cfg["driver"]["device_node"]
+        env["DVF_REG_COUNT"] = "256"
+        env["DVF_REG_SIZE"] = "4"
+        env["DVF_BAR_SIZE"] = "1024"
+
+    return env
+
+
 def build_qemu_cmd(cfg: dict) -> list:
     q = cfg["qemu"]
     share_dir = q["share_dir"]
+    target = cfg.get("target_mode", "qemu")
 
     cmd = [
         q["binary"],
@@ -136,9 +154,18 @@ def build_qemu_cmd(cfg: dict) -> list:
         "-nographic",
         # 9p virtio share
         "-virtfs", f"local,path={share_dir},mount_tag=hostshare,security_model=mapped,id=hostshare",
-        # Custom GPGPU device
-        "-device", q["device_name"],
     ]
+
+    # Device attachment depends on target mode
+    if target == "hybrid":
+        fpga = cfg.get("fpga", {})
+        pci_addr = fpga.get("pci_address", "")
+        if not pci_addr:
+            fail("hybrid mode requires fpga.pci_address in config")
+            sys.exit(1)
+        cmd.extend(["-device", f"vfio-pci,host={pci_addr},id=fpga0"])
+    else:
+        cmd.extend(["-device", q["device_name"]])
 
     if q.get("extra_flags"):
         cmd.extend(q["extra_flags"].split())
@@ -638,6 +665,97 @@ def generate_report(results: list, cfg: dict, elapsed: float):
 
 
 # ---------------------------------------------------------------------------
+# FPGA Native Mode: Run tests directly on the host (no QEMU)
+# ---------------------------------------------------------------------------
+
+def run_tests_native(cfg: dict) -> list:
+    """Run test binaries natively on the host for FPGA mode."""
+    test_cfg = cfg["tests"]
+    fpga_drv = cfg.get("fpga_driver", cfg["driver"])
+    test_bin_dir = PROJECT_DIR / "c-test-binaries"
+    results = []
+
+    # Set up DVF_* environment variables for the test binaries
+    device_env = get_device_env(cfg)
+    run_env = os.environ.copy()
+    run_env.update(device_env)
+
+    info(f"FPGA native mode — device: {device_env.get('DVF_DEVICE_PATH')}")
+    info(f"  regs={device_env.get('DVF_REG_COUNT')}  "
+         f"reg_size={device_env.get('DVF_REG_SIZE')}  "
+         f"bar={device_env.get('DVF_BAR_SIZE')}")
+
+    # Check if device node exists
+    dev_node = fpga_drv.get("device_node", "/dev/fpga0")
+    if not os.path.exists(dev_node):
+        warn(f"Device node {dev_node} not found — attempting to load driver...")
+        ko_path = fpga_drv.get("ko_file", "")
+        if ko_path and os.path.exists(ko_path):
+            result = subprocess.run(["insmod", ko_path], capture_output=True, text=True)
+            if result.returncode != 0:
+                fail(f"insmod {ko_path} failed: {result.stderr}")
+                return results
+            success("FPGA driver loaded")
+        else:
+            fail(f"Driver .ko not found at {ko_path} and {dev_node} does not exist")
+            return results
+
+    # Run each test suite natively
+    for suite_path in test_cfg["suites"]:
+        binary = str(test_bin_dir / suite_path)
+        suite_name = suite_path.replace("/", "::")
+
+        info(f"\n[SUITE] {suite_name}")
+        info(f"  binary: {binary}")
+
+        suite_result = {
+            "suite": suite_name,
+            "binary": suite_path,
+            "exit_code": -1,
+            "raw_output": "",
+            "results": [],
+            "summary": {"total": 0, "passed": 0, "failed": 0, "duration_ms": 0},
+        }
+
+        if not os.path.isfile(binary):
+            fail(f"Binary not found: {binary}")
+            results.append(suite_result)
+            continue
+
+        try:
+            proc = subprocess.run(
+                [binary],
+                env=run_env,
+                capture_output=True,
+                text=True,
+                timeout=test_cfg.get("test_timeout", 60),
+            )
+            suite_result["exit_code"] = proc.returncode
+            suite_result["raw_output"] = proc.stderr + proc.stdout
+
+            for line in proc.stderr.strip().split("\n"):
+                if line.strip():
+                    print(f"  {line}")
+
+            if proc.stdout.strip():
+                try:
+                    parsed = json.loads(proc.stdout.strip())
+                    suite_result["results"] = parsed.get("results", [])
+                    suite_result["summary"] = parsed.get("summary", suite_result["summary"])
+                except json.JSONDecodeError:
+                    pass
+
+        except subprocess.TimeoutExpired:
+            fail(f"Suite timed out after {test_cfg.get('test_timeout', 60)}s")
+        except Exception as e:
+            fail(f"Error running {binary}: {e}")
+
+        results.append(suite_result)
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -653,14 +771,27 @@ def main():
                         help="Skip the build step")
     parser.add_argument("--kvm", action="store_true",
                         help="Enable KVM acceleration (off by default)")
+    parser.add_argument("--target", choices=["qemu", "fpga", "hybrid"],
+                        default=None,
+                        help="Override target_mode from config (qemu/fpga/hybrid)")
     args = parser.parse_args()
 
     cfg = load_config(Path(args.config))
 
+    # CLI --target overrides config file
+    target_mode = args.target or cfg.get("target_mode", "qemu")
+    cfg["target_mode"] = target_mode
+
     header("DVF Driver Validation Suite")
-    info(f"Device: {cfg['qemu']['device_name']}")
+    info(f"Target mode: {target_mode}")
+    if target_mode in ("qemu", "hybrid"):
+        info(f"Device: {cfg['qemu']['device_name']}")
+        info(f"QEMU:   {cfg['qemu']['binary']}")
+    if target_mode in ("fpga", "hybrid"):
+        fpga_cfg = cfg.get("fpga", {})
+        info(f"FPGA PCI: {fpga_cfg.get('pci_address', '(not set)')}")
+        info(f"FPGA dev: {fpga_cfg.get('device_node', '/dev/fpga0')}")
     info(f"Driver: {cfg['driver']['module_name']}")
-    info(f"QEMU:   {cfg['qemu']['binary']}")
 
     # Step 1: Build
     if not args.skip_build:
@@ -683,7 +814,16 @@ def main():
 
     info(f"Suites to run: {len(cfg['tests']['suites'])}")
 
-    # Step 2: Launch QEMU
+    # --- Dispatch by target mode ---
+    if target_mode == "fpga":
+        start_time = time.time()
+        results = run_tests_native(cfg)
+        elapsed = time.time() - start_time
+        generate_report(results, cfg, elapsed)
+        total_failed = sum(s["summary"]["failed"] for s in results)
+        sys.exit(1 if total_failed > 0 else 0)
+
+    # qemu or hybrid mode: boot QEMU
     cmd = build_qemu_cmd(cfg)
     if args.kvm:
         cmd.extend(["-enable-kvm"])
@@ -723,3 +863,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

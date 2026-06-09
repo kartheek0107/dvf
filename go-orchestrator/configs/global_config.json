@@ -12,6 +12,11 @@
     "socket_dir": "/var/run/dvf/qmp",
     "serial_socket_dir": "/var/run/dvf/serial"
   },
+  "fpga": {
+    "vfio_group_path": "/dev/vfio",
+    "iommu_enabled": false,
+    "pci_addresses": []
+  },
   "storage": {
     "postgres": {
       "host": "localhost",

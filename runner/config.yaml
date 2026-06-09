@@ -2,6 +2,14 @@
 #
 # This config tells the runner where to find your QEMU, kernel, rootfs,
 # and how to interact with the guest VM.
+#
+# Supports three target modes:
+#   - "qemu"   : Boot QEMU with a custom emulated device (default, existing workflow)
+#   - "fpga"   : Run tests natively on the host against a physical FPGA PCIe device
+#   - "hybrid" : Boot QEMU with the FPGA passed through via VFIO-PCI
+
+# Target mode: "qemu" (default), "fpga" (native host), "hybrid" (FPGA via VFIO in QEMU)
+target_mode: qemu
 
 qemu:
   # Path to your custom QEMU binary (with gpgpu device compiled in)
@@ -32,6 +40,27 @@ qemu:
   # Extra QEMU flags (appended to the command line)
   extra_flags: ""
 
+# FPGA configuration (used when target_mode is "fpga" or "hybrid")
+fpga:
+  # PCIe BDF (Bus:Device.Function) address of the FPGA on the host
+  # Example: "0000:01:00.0"
+  pci_address: ""
+
+  # Device node created by the FPGA driver (on the host or in the guest)
+  device_node: /dev/fpga0
+
+  # Number of registers accessible via BAR0
+  reg_count: 256
+
+  # Bytes per register
+  reg_size: 4
+
+  # Total BAR0 size in bytes (reg_count * reg_size)
+  bar_size: 1024
+
+  # VFIO group (auto-detected from pci_address if not specified)
+  vfio_group: ""
+
 driver:
   # Kernel module filename (relative to share_dir)
   ko_file: gpgpu_driver.ko
@@ -41,6 +70,17 @@ driver:
 
   # Device node created by the driver
   device_node: /dev/gpgpu
+
+# FPGA driver (used when target_mode is "fpga" or "hybrid")
+fpga_driver:
+  # Kernel module filename (relative to share_dir for hybrid, absolute for fpga)
+  ko_file: fpga_driver.ko
+
+  # Module name (for lsmod/rmmod)
+  module_name: fpga_driver
+
+  # Device node created by the FPGA driver
+  device_node: /dev/fpga0
 
 tests:
   # Directory where test binaries are installed (relative to share_dir)

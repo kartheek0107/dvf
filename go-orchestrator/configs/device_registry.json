@@ -10,6 +10,7 @@
       "driver_module": "gpgpu_driver",
       "driver_path": "driver-source/gpgpu_driver/gpgpu_driver.ko",
       "description": "Custom PCI GPGPU device with 256x32-bit MMIO registers (BAR0 = 4KB)",
+      "target_modes": ["qemu"],
       "capabilities": [
         "mmio",
         "register_rw"
@@ -19,6 +20,39 @@
           "type": "memory",
           "size_bytes": 4096,
           "description": "256x32-bit register file via MMIO"
+        }
+      },
+      "test_suites": [
+        "smoke/register_rw",
+        "smoke/offset_sweep",
+        "regression/patterns",
+        "regression/persistence",
+        "stress/concurrent_rw",
+        "stress/throughput",
+        "error/boundaries"
+      ]
+    },
+    {
+      "id": "fpga",
+      "name": "Custom FPGA Accelerator",
+      "vendor_id": "0x10EE",
+      "device_id": "0x9038",
+      "pci_class": "0x1200",
+      "qemu_device_name": "vfio-pci",
+      "driver_module": "fpga_driver",
+      "driver_path": "driver-source/fpga_driver/fpga_driver.ko",
+      "description": "Physical FPGA PCIe accelerator — update vendor/device IDs to match your board",
+      "target_modes": ["fpga", "hybrid"],
+      "capabilities": [
+        "mmio",
+        "register_rw",
+        "dma"
+      ],
+      "bar_layout": {
+        "bar0": {
+          "type": "memory",
+          "size_bytes": 4096,
+          "description": "Register file via MMIO"
         }
       },
       "test_suites": [

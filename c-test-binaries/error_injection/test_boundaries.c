@@ -1,22 +1,27 @@
 /*
  * test_boundaries.c — Error injection and boundary condition tests.
  *
+ * Uses the generic DVF device API so this binary works against any
+ * register-based device (QEMU GPGPU, physical FPGA, etc.).
+ *
  * Tests:
  *   - Read beyond BAR boundary
  *   - Write beyond BAR boundary
  *   - Zero-length read/write
- *   - Device open in wrong mode
+ *   - Device existence check
  */
 
 #include "test_framework.h"
 #include "device_helpers.h"
 
+static DeviceConfig g_cfg;
+
 int test_read_beyond_bar(void) {
-    int fd = gpgpu_open_device(O_RDONLY);
+    int fd = dvf_open_device(&g_cfg, O_RDONLY);
     ASSERT_TRUE(fd >= 0, "failed to open device");
 
-    /* Seek to offset 1024 (beyond BAR0 size) */
-    off_t pos = lseek(fd, GPGPU_BAR_SIZE, SEEK_SET);
+    /* Seek to offset at BAR boundary (beyond last valid register) */
+    off_t pos = lseek(fd, g_cfg.bar_size, SEEK_SET);
     if (pos == (off_t)-1) {
         /* lseek failing is acceptable */
         close(fd);
@@ -25,7 +30,7 @@ int test_read_beyond_bar(void) {
 
     uint32_t val = 0xDEAD;
     ssize_t n = read(fd, &val, sizeof(val));
-    /* Driver returns 0 for offset >= 1024 */
+    /* Driver returns 0 for offset >= bar_size */
     ASSERT_TRUE(n <= 0, "read beyond BAR should fail or return 0");
 
     close(fd);
@@ -33,10 +38,10 @@ int test_read_beyond_bar(void) {
 }
 
 int test_write_beyond_bar(void) {
-    int fd = gpgpu_open_device(O_WRONLY);
+    int fd = dvf_open_device(&g_cfg, O_WRONLY);
     ASSERT_TRUE(fd >= 0, "failed to open device");
 
-    off_t pos = lseek(fd, GPGPU_BAR_SIZE, SEEK_SET);
+    off_t pos = lseek(fd, g_cfg.bar_size, SEEK_SET);
     if (pos == (off_t)-1) {
         close(fd);
         return 0;
@@ -52,7 +57,7 @@ int test_write_beyond_bar(void) {
 }
 
 int test_read_large_offset(void) {
-    int fd = gpgpu_open_device(O_RDONLY);
+    int fd = dvf_open_device(&g_cfg, O_RDONLY);
     ASSERT_TRUE(fd >= 0, "failed to open device");
 
     /* Try a very large offset */
@@ -71,7 +76,7 @@ int test_read_large_offset(void) {
 }
 
 int test_zero_length_read(void) {
-    int fd = gpgpu_open_device(O_RDONLY);
+    int fd = dvf_open_device(&g_cfg, O_RDONLY);
     ASSERT_TRUE(fd >= 0, "failed to open device");
 
     char buf;
@@ -84,7 +89,7 @@ int test_zero_length_read(void) {
 }
 
 int test_zero_length_write(void) {
-    int fd = gpgpu_open_device(O_WRONLY);
+    int fd = dvf_open_device(&g_cfg, O_WRONLY);
     ASSERT_TRUE(fd >= 0, "failed to open device");
 
     char buf = 0;
@@ -97,12 +102,15 @@ int test_zero_length_write(void) {
 }
 
 int test_device_exists(void) {
-    ASSERT_TRUE(gpgpu_device_exists(),
-                "/dev/gpgpu does not exist — is the driver loaded?");
+    ASSERT_TRUE(dvf_device_exists(&g_cfg),
+                "device node does not exist — is the driver loaded?");
     return 0;
 }
 
 int main(void) {
+    g_cfg = dvf_load_config();
+    dvf_print_config(&g_cfg);
+
     TEST_SUITE_BEGIN("error_injection/boundaries");
     RUN_TEST(test_device_exists);
     RUN_TEST(test_read_beyond_bar);

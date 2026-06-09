@@ -5,6 +5,7 @@ package config
 type GlobalConfig struct {
 	Server     ServerConfig     `json:"server"`
 	QEMU       QEMUConfig       `json:"qemu"`
+	FPGA       FPGAConfig       `json:"fpga"`
 	Storage    StorageConfig    `json:"storage"`
 	Telemetry  TelemetryConfig  `json:"telemetry"`
 	VMDefaults VMDefaultsConfig `json:"vm_defaults"`
@@ -25,6 +26,13 @@ type QEMUConfig struct {
 	VMImageDir      string `json:"vm_image_dir"`
 	SocketDir       string `json:"socket_dir"`
 	SerialSocketDir string `json:"serial_socket_dir"`
+}
+
+// FPGAConfig defines FPGA infrastructure settings for physical device validation.
+type FPGAConfig struct {
+	VFIOGroupPath string   `json:"vfio_group_path"`
+	IOMMUEnabled  bool     `json:"iommu_enabled"`
+	PCIAddresses  []string `json:"pci_addresses"`
 }
 
 // StorageConfig groups all storage backend configurations.
@@ -96,6 +104,7 @@ type DeviceEntry struct {
 	DriverModule   string            `json:"driver_module"`
 	DriverPath     string            `json:"driver_path"`
 	Description    string            `json:"description"`
+	TargetModes    []string          `json:"target_modes"`
 	Capabilities   []string          `json:"capabilities"`
 	BARLayout      map[string]BARDef `json:"bar_layout"`
 	TestSuites     []string          `json:"test_suites"`

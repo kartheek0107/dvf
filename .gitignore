@@ -1,0 +1,81 @@
+# ============================================================
+# DVF Driver Validation Suite — .gitignore
+# ============================================================
+
+# --- C Test Binaries (compiled outputs) ---
+c-test-binaries/read_write/test_register_rw
+c-test-binaries/read_write/test_offset_sweep
+c-test-binaries/data_integrity/test_patterns
+c-test-binaries/data_integrity/test_persistence
+c-test-binaries/concurrency/test_concurrent_rw
+c-test-binaries/stress_performance/test_throughput
+c-test-binaries/error_injection/test_boundaries
+
+# --- Kernel Module Build Artifacts ---
+*.o
+*.ko
+*.mod
+*.mod.c
+*.mod.o
+*.order
+*.symvers
+*.cmd
+.tmp_versions/
+.cache.mk
+modules.order
+Module.symvers
+.module-common.o
+
+# --- Go Build Artifacts ---
+go-orchestrator/bin/
+go-orchestrator/cmd/orchestrator/orchestrator
+*.exe
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+venv/
+.venv/
+
+# --- Generated Protobuf (keep .proto, ignore generated Go) ---
+go-orchestrator/proto/orchestratorpb/*.pb.go
+go-orchestrator/proto/telemetrypb/*.pb.go
+go-orchestrator/proto/agentpb/*.pb.go
+
+# --- Test Results (regenerated each run) ---
+results/
+
+# --- IDE / Editor ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# --- VM Images & Rootfs (large, local-only) ---
+*.qcow2
+*.img
+*.ext4
+*.iso
+
+# --- Runner nested git (accidental) ---
+runner/.git/
+
+# --- OS / System ---
+Thumbs.db
+.DS_Store
+
+# --- Docker ---
+docker-compose.override.yml
+
+# --- Misc ---
+*.log
+*.bak
+*.tmp

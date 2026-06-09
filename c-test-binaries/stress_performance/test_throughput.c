@@ -1,5 +1,8 @@
 /*
- * test_throughput.c — Stress and throughput benchmarks for the GPGPU device.
+ * test_throughput.c — Stress and throughput benchmarks.
+ *
+ * Uses the generic DVF device API so this binary works against any
+ * register-based device (QEMU GPGPU, physical FPGA, etc.).
  *
  * Tests:
  *   - Write throughput (ops/sec)
@@ -13,8 +16,10 @@
 #define BENCH_ITERATIONS 10000
 #define SUSTAINED_SECS   3
 
+static DeviceConfig g_cfg;
+
 int test_write_throughput(void) {
-    int fd = gpgpu_open_device(O_WRONLY);
+    int fd = dvf_open_device(&g_cfg, O_WRONLY);
     ASSERT_TRUE(fd >= 0, "failed to open device");
 
     struct timespec start, end;
@@ -22,7 +27,7 @@ int test_write_throughput(void) {
 
     for (int i = 0; i < BENCH_ITERATIONS; i++) {
         uint32_t val = (uint32_t)i;
-        gpgpu_write_reg(fd, i % GPGPU_REG_COUNT, val);
+        dvf_write_reg(fd, i % g_cfg.reg_count, val, &g_cfg);
     }
 
     clock_gettime(CLOCK_MONOTONIC, &end);
@@ -38,7 +43,7 @@ int test_write_throughput(void) {
 }
 
 int test_read_throughput(void) {
-    int fd = gpgpu_open_device(O_RDONLY);
+    int fd = dvf_open_device(&g_cfg, O_RDONLY);
     ASSERT_TRUE(fd >= 0, "failed to open device");
 
     struct timespec start, end;
@@ -46,7 +51,7 @@ int test_read_throughput(void) {
 
     int err = 0;
     for (int i = 0; i < BENCH_ITERATIONS; i++) {
-        gpgpu_read_reg(fd, i % GPGPU_REG_COUNT, &err);
+        dvf_read_reg(fd, i % g_cfg.reg_count, &err, &g_cfg);
     }
 
     clock_gettime(CLOCK_MONOTONIC, &end);
@@ -63,7 +68,7 @@ int test_read_throughput(void) {
 }
 
 int test_sustained_load(void) {
-    int fd = gpgpu_open_device(O_RDWR);
+    int fd = dvf_open_device(&g_cfg, O_RDWR);
     ASSERT_TRUE(fd >= 0, "failed to open device");
 
     struct timespec start, now;
@@ -74,11 +79,11 @@ int test_sustained_load(void) {
 
     while (1) {
         /* Write */
-        gpgpu_write_reg(fd, (int)(write_ops % GPGPU_REG_COUNT), (uint32_t)write_ops);
+        dvf_write_reg(fd, (int)(write_ops % g_cfg.reg_count), (uint32_t)write_ops, &g_cfg);
         write_ops++;
 
         /* Read */
-        gpgpu_read_reg(fd, (int)(read_ops % GPGPU_REG_COUNT), &err);
+        dvf_read_reg(fd, (int)(read_ops % g_cfg.reg_count), &err, &g_cfg);
         read_ops++;
 
         /* Check time every 1000 ops */
@@ -105,6 +110,9 @@ int test_sustained_load(void) {
 }
 
 int main(void) {
+    g_cfg = dvf_load_config();
+    dvf_print_config(&g_cfg);
+
     TEST_SUITE_BEGIN("stress_performance/throughput");
     RUN_TEST(test_write_throughput);
     RUN_TEST(test_read_throughput);

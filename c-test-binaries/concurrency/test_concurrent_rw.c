@@ -1,5 +1,8 @@
 /*
- * test_concurrent_rw.c — Multi-threaded concurrency tests for the GPGPU device.
+ * test_concurrent_rw.c — Multi-threaded concurrency tests.
+ *
+ * Uses the generic DVF device API so this binary works against any
+ * register-based device (QEMU GPGPU, physical FPGA, etc.).
  *
  * Tests:
  *   - Writer/reader race on the same register
@@ -15,6 +18,7 @@
 #define ITERATIONS  5000
 #define DURATION_MS 1000
 
+static DeviceConfig g_cfg;
 static atomic_int g_stop = 0;
 static atomic_int g_errors = 0;
 
@@ -22,13 +26,13 @@ static atomic_int g_errors = 0;
 
 static void *writer_func(void *arg) {
     (void)arg;
-    int fd = gpgpu_open_device(O_RDWR);
+    int fd = dvf_open_device(&g_cfg, O_RDWR);
     if (fd < 0) { atomic_fetch_add(&g_errors, 1); return NULL; }
 
     uint32_t count = 0;
     while (!atomic_load(&g_stop)) {
         uint32_t val = 100 + (count % 100);
-        gpgpu_write_reg(fd, 0, val);
+        dvf_write_reg(fd, 0, val, &g_cfg);
         count++;
     }
     close(fd);
@@ -37,12 +41,12 @@ static void *writer_func(void *arg) {
 
 static void *reader_func(void *arg) {
     (void)arg;
-    int fd = gpgpu_open_device(O_RDONLY);
+    int fd = dvf_open_device(&g_cfg, O_RDONLY);
     if (fd < 0) { atomic_fetch_add(&g_errors, 1); return NULL; }
 
     while (!atomic_load(&g_stop)) {
         int err = 0;
-        gpgpu_read_reg(fd, 0, &err);
+        dvf_read_reg(fd, 0, &err, &g_cfg);
         if (err) atomic_fetch_add(&g_errors, 1);
     }
     close(fd);
@@ -72,12 +76,12 @@ int test_writer_reader_race(void) {
 
 static void *multi_writer_func(void *arg) {
     int thread_id = *(int *)arg;
-    int fd = gpgpu_open_device(O_RDWR);
+    int fd = dvf_open_device(&g_cfg, O_RDWR);
     if (fd < 0) { atomic_fetch_add(&g_errors, 1); return NULL; }
 
     for (int i = 0; i < ITERATIONS && !atomic_load(&g_stop); i++) {
         uint32_t val = (uint32_t)((thread_id << 16) | i);
-        if (gpgpu_write_reg(fd, 0, val) != 0)
+        if (dvf_write_reg(fd, 0, val, &g_cfg) != 0)
             atomic_fetch_add(&g_errors, 1);
     }
     close(fd);
@@ -101,10 +105,10 @@ int test_multi_writer(void) {
     ASSERT_EQ(atomic_load(&g_errors), 0, "errors during multi-writer");
 
     /* After all writes complete, read reg 0 — should contain SOME valid value */
-    int fd = gpgpu_open_device(O_RDONLY);
+    int fd = dvf_open_device(&g_cfg, O_RDONLY);
     ASSERT_TRUE(fd >= 0, "post-write read open failed");
     int err = 0;
-    gpgpu_read_reg(fd, 0, &err);
+    dvf_read_reg(fd, 0, &err, &g_cfg);
     ASSERT_EQ(err, 0, "post-write read failed");
     close(fd);
 
@@ -120,15 +124,15 @@ typedef struct {
 
 static void *reg_writer_func(void *arg) {
     RegTask *task = (RegTask *)arg;
-    int fd = gpgpu_open_device(O_RDWR);
+    int fd = dvf_open_device(&g_cfg, O_RDWR);
     if (fd < 0) { atomic_fetch_add(&g_errors, 1); return NULL; }
 
     for (int i = 0; i < ITERATIONS; i++) {
-        if (gpgpu_write_reg(fd, task->reg_idx, task->value + (uint32_t)i) != 0)
+        if (dvf_write_reg(fd, task->reg_idx, task->value + (uint32_t)i, &g_cfg) != 0)
             atomic_fetch_add(&g_errors, 1);
     }
     /* Write final known value for verification */
-    gpgpu_write_reg(fd, task->reg_idx, task->value);
+    dvf_write_reg(fd, task->reg_idx, task->value, &g_cfg);
     close(fd);
     return NULL;
 }
@@ -154,11 +158,11 @@ int test_multi_register_concurrent(void) {
     ASSERT_EQ(atomic_load(&g_errors), 0, "errors during multi-reg concurrent write");
 
     /* Verify each register has the correct final value */
-    int fd = gpgpu_open_device(O_RDONLY);
+    int fd = dvf_open_device(&g_cfg, O_RDONLY);
     ASSERT_TRUE(fd >= 0, "verification open failed");
     int err = 0;
     for (int i = 0; i < 4; i++) {
-        uint32_t actual = gpgpu_read_reg(fd, tasks[i].reg_idx, &err);
+        uint32_t actual = dvf_read_reg(fd, tasks[i].reg_idx, &err, &g_cfg);
         ASSERT_EQ(err, 0, "verification read failed");
         ASSERT_EQ(actual, tasks[i].value, "concurrent reg final value mismatch");
     }
@@ -168,6 +172,9 @@ int test_multi_register_concurrent(void) {
 }
 
 int main(void) {
+    g_cfg = dvf_load_config();
+    dvf_print_config(&g_cfg);
+
     TEST_SUITE_BEGIN("concurrency/concurrent_rw");
     RUN_TEST(test_writer_reader_race);
     RUN_TEST(test_multi_writer);

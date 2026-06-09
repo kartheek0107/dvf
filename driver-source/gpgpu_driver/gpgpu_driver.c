@@ -19,7 +19,8 @@ static struct device* gpgpu_device = NULL;
 
 static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *offset){
     
-    uint32_t val; 
+    uint32_t val;
+    if (len == 0) return 0;
     if (*offset >= 1024) return 0;
 
     val = ioread32(mmio_base + *offset);
@@ -36,6 +37,7 @@ static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *of
 static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, loff_t *offset){
     
     uint32_t val;
+    if (len == 0) return 0;
     if (*offset >= 1024) return -EFAULT;
 
     if (copy_from_user(&val, buffer, sizeof(val))) {
