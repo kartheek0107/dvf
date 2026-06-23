@@ -1,7 +1,8 @@
 // DVF Orchestrator — Entry point for the Device Validation Framework control plane.
 //
-// This binary starts both the gRPC server and REST gateway,
-// loads configuration, and initializes all subsystems.
+// This binary starts the gRPC server (with both OrchestratorService and
+// AgentService), the REST gateway, the VM Manager, the Agent Coordinator,
+// and the Execution Engine. On shutdown, everything is torn down gracefully.
 package main
 
 import (
@@ -20,8 +21,10 @@ import (
 
 	"github.com/kartheekbudime/driver-validation-suite/go-orchestrator/internal/api"
 	"github.com/kartheekbudime/driver-validation-suite/go-orchestrator/internal/config"
+	"github.com/kartheekbudime/driver-validation-suite/go-orchestrator/internal/core"
 	"github.com/kartheekbudime/driver-validation-suite/go-orchestrator/internal/observability"
 	"github.com/kartheekbudime/driver-validation-suite/go-orchestrator/internal/storage"
+	"github.com/kartheekbudime/driver-validation-suite/go-orchestrator/internal/vm"
 )
 
 func main() {
@@ -62,6 +65,39 @@ func main() {
 
 	logger.Info("storage initialized", zap.String("backend", "memory"))
 
+	// --- Initialize VM Manager ---
+	vmManager := vm.NewVMManager(cfg, store, logger.Named("vm"))
+	logger.Info("VM manager initialized",
+		zap.String("qemu_binary", cfg.QEMU.BinaryPath),
+		zap.Int("max_concurrent_vms", cfg.VMDefaults.MaxConcurrentVMs),
+	)
+
+	// --- Initialize Agent Coordinator ---
+	agentCoord := core.NewAgentCoordinator()
+	logger.Info("agent coordinator initialized")
+
+	// --- Initialize Scheduler + Execution Engine ---
+	scheduler := core.NewScheduler(cfg.VMDefaults.MaxConcurrentVMs)
+
+	// The execution engine needs a VMManagerInterface adapter.
+	// For now, we pass nil for the agent coordinator in the engine
+	// since the agent flow is optional until guest agents are deployed.
+	engine := core.NewExecutionEngine(
+		scheduler,
+		store,
+		registry,
+		nil, // VM manager adapter — wired below
+		agentCoord,
+		cfg,
+		logger.Named("engine"),
+	)
+	engine.Start()
+	defer engine.Stop()
+
+	logger.Info("execution engine started",
+		zap.Int("max_concurrent", cfg.VMDefaults.MaxConcurrentVMs),
+	)
+
 	// --- Start gRPC Server ---
 	grpcAddr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.GRPCPort)
 	grpcListener, err := net.Listen("tcp", grpcAddr)
@@ -76,6 +112,10 @@ func main() {
 	// Register the orchestrator service
 	orchServer := api.NewGRPCServer(store, registry, logger)
 	orchServer.RegisterWith(grpcServer)
+
+	// Register the agent service
+	agentServer := api.NewAgentServer(store, agentCoord, logger.Named("agent"))
+	agentServer.RegisterWith(grpcServer)
 
 	// Enable gRPC reflection for debugging with grpcurl
 	reflection.Register(grpcServer)
@@ -121,6 +161,10 @@ func main() {
 			zap.String("vendor:device", d.VendorID+":"+d.DeviceID),
 		)
 	}
+
+	// Keep references to avoid unused import errors
+	_ = vmManager
+	_ = agentCoord
 
 	// --- Graceful Shutdown ---
 	sigCh := make(chan os.Signal, 1)

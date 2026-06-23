@@ -63,13 +63,13 @@ fpga:
 
 driver:
   # Kernel module filename (relative to share_dir)
-  ko_file: gpgpu_driver.ko
+  ko_file: gpgpu_pcie_ep_driver.ko
 
   # Module name (for lsmod/rmmod)
-  module_name: gpgpu_driver
+  module_name: gpgpu_pcie_ep_driver
 
   # Device node created by the driver
-  device_node: /dev/gpgpu
+  device_node: /dev/gp_gpu
 
 # FPGA driver (used when target_mode is "fpga" or "hybrid")
 fpga_driver:
@@ -84,18 +84,18 @@ fpga_driver:
 
 tests:
   # Directory where test binaries are installed (relative to share_dir)
-  test_dir: dvf_tests
+  test_dir: vishwa_tests
 
   # Ordered list of test suites to run
   # Each entry is a path relative to test_dir
   suites:
-    - error_injection/test_boundaries
-    - read_write/test_register_rw
-    - read_write/test_offset_sweep
-    - data_integrity/test_patterns
-    - data_integrity/test_persistence
-    - concurrency/test_concurrent_rw
-    - stress_performance/test_throughput
+    - regression/vecaddx/vecaddx
+    - opencl/vecadd/vecadd
+    - opencl/vecadd2/vecadd2
+    - opencl/ai_predict/ai_predict
+    - opencl/blur/blur
+    - opencl/gray/gray
+    - opencl/sgemm/sgemm
 
   # Per-test timeout in seconds
   test_timeout: 60

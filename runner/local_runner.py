@@ -174,6 +174,41 @@ def build_qemu_cmd(cfg: dict) -> list:
 
 
 # ---------------------------------------------------------------------------
+# Step 2b: Pre-flight — kill any stale DVF QEMU holding the rootfs lock
+# ---------------------------------------------------------------------------
+
+def kill_stale_qemu(rootfs_path: str):
+    """
+    Kill any lingering qemu-system-x86_64 process that is using our rootfs.
+    This prevents the 'Failed to get write lock' error on successive runs.
+    """
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["pgrep", "-a", "-f", "qemu-system-x86_64"],
+            capture_output=True, text=True
+        )
+        for line in result.stdout.strip().splitlines():
+            parts = line.split(None, 1)
+            if len(parts) < 2:
+                continue
+            pid_str, cmdline = parts[0], parts[1]
+            # Only kill DVF-launched instances (those using our specific rootfs)
+            if rootfs_path in cmdline and "-nographic" in cmdline:
+                try:
+                    pid = int(pid_str)
+                    warn(f"Killing stale DVF QEMU process (PID {pid}) holding rootfs lock...")
+                    import os
+                    os.kill(pid, signal.SIGKILL)
+                    time.sleep(0.5)
+                    success(f"Stale QEMU (PID {pid}) killed")
+                except (ValueError, ProcessLookupError, PermissionError) as e:
+                    warn(f"Could not kill PID {pid_str}: {e}")
+    except FileNotFoundError:
+        pass  # pgrep not available — skip
+
+
+# ---------------------------------------------------------------------------
 # Step 3: Launch QEMU & interact via serial
 # ---------------------------------------------------------------------------
 
@@ -208,6 +243,9 @@ class QEMUInstance:
     def _wait_for_boot(self) -> str:
         """Wait for the guest to boot — detects bash-as-init or login prompt.
 
+        Also checks stderr early so that QEMU startup errors (like a disk
+        write-lock failure) are reported immediately instead of timing out.
+
         With init=/bin/bash, the guest prints:
           bash: cannot set terminal process group (-1): ...
           bash: no job control in this shell
@@ -222,6 +260,18 @@ class QEMUInstance:
         last_nl = 0
         # Don't send newlines too early — wait for first sign of life
         first_output_seen = False
+
+        # Check stderr immediately — QEMU startup errors (e.g. disk lock)
+        # appear on stderr before any stdout output.
+        time.sleep(0.3)
+        ready_err, _, _ = select.select([self.proc.stderr], [], [], 0.5)
+        if ready_err:
+            stderr_peek = self.proc.stderr.read1(4096).decode("utf-8", errors="replace").strip()
+            if stderr_peek:
+                fail(f"QEMU startup error: {stderr_peek}")
+                # Let the process exit naturally then return error
+                self.proc.wait(timeout=3)
+                return "error"
 
         while time.time() - start < self.boot_timeout:
             now = time.time()
@@ -449,6 +499,14 @@ def run_tests(vm: QEMUInstance, cfg: dict) -> list:
     ls_out, ls_rc = vm.run_command(f"ls {guest_mount}/")
     info(f"  Share contents: {ls_out}")
 
+    # Mount essential virtual filesystems (init=/bin/bash skips normal init)
+    # These are required for PCI driver-device binding to work
+    info("Mounting essential virtual filesystems...")
+    vm.run_command("mount -t proc proc /proc 2>/dev/null")
+    vm.run_command("mount -t sysfs sysfs /sys 2>/dev/null")
+    vm.run_command("mount -t devtmpfs devtmpfs /dev 2>/dev/null")
+    success("Virtual filesystems mounted (/proc, /sys, /dev)")
+
     # Load driver
     ko_path = f"{guest_mount}/{driver_cfg['ko_file']}"
     info(f"Loading driver: insmod {ko_path}")
@@ -470,12 +528,29 @@ def run_tests(vm: QEMUInstance, cfg: dict) -> list:
         return results
     success("Driver loaded successfully")
 
-    # Verify device node
+    # Verify device node — give the PCI probe a moment to complete
+    time.sleep(1.0)
     output, rc = vm.run_command(f"ls -la {driver_cfg['device_node']}")
     if rc != 0:
-        fail(f"Device node {driver_cfg['device_node']} not found")
+        # Dump diagnostic info so we can see what happened during probe
+        dmesg_out, _ = vm.run_command("dmesg | tail -20")
+        info(f"  dmesg after insmod:\n{dmesg_out}")
+        lspci_out, _ = vm.run_command("lspci -nn 2>/dev/null || cat /proc/bus/pci/devices 2>/dev/null || echo 'no lspci'")
+        info(f"  PCI devices:\n{lspci_out}")
+        lsmod_out, _ = vm.run_command("lsmod")
+        info(f"  Loaded modules:\n{lsmod_out}")
+        fail(f"Device node {driver_cfg['device_node']} not found — PCI probe likely failed (check dmesg above)")
         return results
     success(f"Device node {driver_cfg['device_node']} present")
+
+    # Diagnostic: run ldd-equivalent on libpocl.so.2 inside guest
+    lib_dir = f"{guest_mount}/vishwa_tests/lib"
+    loader = f"{lib_dir}/ld-linux-x86-64.so.2"
+    ldd_out, ldd_rc = vm.run_command(f"LD_TRACE_LOADED_OBJECTS=1 {loader} --library-path {lib_dir} {lib_dir}/libpocl.so.2")
+    info(f"Diagnostics: libpocl.so.2 dependencies in guest:\n{ldd_out}")
+
+    ld_check, _ = vm.run_command("which ld || find /usr /bin /sbin -name ld -type f 2>/dev/null || echo 'ld not found'")
+    info(f"Diagnostics: ld check in guest: {ld_check.strip()}")
 
     # Run each test suite
     for suite_path in test_cfg["suites"]:
@@ -488,8 +563,32 @@ def run_tests(vm: QEMUInstance, cfg: dict) -> list:
         # Make binary executable
         vm.run_command(f"chmod +x {binary}")
 
-        # Run the test binary, capture combined stdout+stderr
-        output, rc = vm.run_command(binary, timeout=test_cfg["test_timeout"])
+        # Run the test binary with the required env variables for the Vishwa runtime
+        lib_dir = f"{guest_mount}/vishwa_tests/lib"
+        icd_dir = f"{lib_dir}/OpenCL/vendors"
+        env_prefix = (
+            "EMCONFIG_PATH=/mnt/hw_bit_file "
+            "XRT_DEVICE_INDEX=0 "
+            "XRT_XCLBIN_PATH=/mnt/hw_bit_file/tbs_2d.xclbin "
+            f"LD_LIBRARY_PATH={lib_dir}:/tmp/toolchain/llvm-vishwa/lib:/tmp/toolchain/pocl/lib64:/tmp/toolchain/gcc11/lib64 "
+            f"OCL_ICD_VENDORS={icd_dir} "
+            "POCL_VISHWA_XLEN=32 "
+            "POCL_CACHE_DIR=/tmp/pocl_cache "
+            "POCL_DEVICES=basic "
+            "PATH=/mnt/share/vishwa_tests/bin:$PATH "
+            "LLVM_PREFIX=/tmp/toolchain/llvm-vishwa"
+        )
+        # Use the host ld-linux to bypass the guest's old glibc
+        loader = f"{lib_dir}/ld-linux-x86-64.so.2"
+        # cd into the test's own directory before running so that relative asset paths
+        # (input.jpg, input.png, bias.txt, kernel.cl, etc.) resolve correctly
+        binary_dir = binary.rsplit("/", 1)[0]
+        t_start = time.time()
+        output, rc = vm.run_command(
+            f"cd {binary_dir} && {env_prefix} {loader} --library-path {lib_dir} {binary}",
+            timeout=test_cfg["test_timeout"]
+        )
+        elapsed_ms = (time.time() - t_start) * 1000.0
 
         # Try to parse JSON from output
         suite_result = {
@@ -498,7 +597,7 @@ def run_tests(vm: QEMUInstance, cfg: dict) -> list:
             "exit_code": rc,
             "raw_output": output,
             "results": [],
-            "summary": {"total": 0, "passed": 0, "failed": 0, "duration_ms": 0},
+            "summary": {"total": 0, "passed": 0, "failed": 0, "duration_ms": round(elapsed_ms, 1)},
         }
 
         # The test framework outputs multi-line JSON to stdout, mixed with
@@ -580,8 +679,28 @@ def run_tests(vm: QEMUInstance, cfg: dict) -> list:
                     "total": pass_count + fail_count,
                     "passed": pass_count,
                     "failed": fail_count,
-                    "duration_ms": 0,
+                    "duration_ms": round(elapsed_ms, 1),
                 }
+                json_found = True
+
+        # Strategy 4: Plain-text "TEST PASSED!" / "FAILED!" sentinel lines.
+        # Tests like vecaddx don't output JSON — they just print a final verdict.
+        if not json_found:
+            full_output_upper = output.upper()
+            if "TEST PASSED" in full_output_upper or (rc == 0 and "PASSED" in full_output_upper):
+                suite_result["results"] = [{"test": suite_name, "status": "PASS", "duration_ms": round(elapsed_ms, 1)}]
+                suite_result["summary"] = {"total": 1, "passed": 1, "failed": 0, "duration_ms": round(elapsed_ms, 1)}
+                json_found = True
+            elif "TEST FAILED" in full_output_upper or "FAILED!" in full_output_upper or rc != 0:
+                # Extract a short error reason if present
+                err_hint = ""
+                for ln in lines:
+                    if "error" in ln.lower() or "failed" in ln.lower():
+                        err_hint = ln.strip()[:120]
+                        break
+                suite_result["results"] = [{"test": suite_name, "status": "FAIL", "duration_ms": round(elapsed_ms, 1),
+                                            "message": err_hint or f"exit code {rc}"}]
+                suite_result["summary"] = {"total": 1, "passed": 0, "failed": 1, "duration_ms": round(elapsed_ms, 1)}
                 json_found = True
 
         # Print results
@@ -824,6 +943,9 @@ def main():
         sys.exit(1 if total_failed > 0 else 0)
 
     # qemu or hybrid mode: boot QEMU
+    # Kill any stale DVF QEMU that might be holding the rootfs write-lock
+    kill_stale_qemu(cfg["qemu"]["rootfs"])
+
     cmd = build_qemu_cmd(cfg)
     if args.kvm:
         cmd.extend(["-enable-kvm"])

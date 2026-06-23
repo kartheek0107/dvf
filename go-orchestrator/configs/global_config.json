@@ -5,7 +5,11 @@
     "host": "0.0.0.0"
   },
   "qemu": {
-    "binary_path": "/usr/bin/qemu-system-x86_64",
+    "binary_path": "/home/kartheekbudime/VirtualMachines/qemu_bin/bin/qemu-system-x86_64",
+    "kernel_path": "/home/kartheekbudime/VirtualMachines/linux/arch/x86/boot/bzImage",
+    "rootfs_path": "/home/kartheekbudime/qemu-rootfs/rootfs.ext4",
+    "share_dir": "/home/kartheekbudime/qemu-rootfs/share",
+    "guest_mount": "/mnt/share",
     "default_memory_mb": 1024,
     "default_cpus": 2,
     "vm_image_dir": "/var/lib/dvf/images",
