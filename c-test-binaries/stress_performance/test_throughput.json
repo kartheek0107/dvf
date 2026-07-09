@@ -1,0 +1,7 @@
+{
+  "name": "test_throughput",
+  "category": "stress_performance",
+  "capabilities": ["mmio", "dma", "performance"],
+  "dependencies": ["data_integrity/test_patterns", "concurrency/test_concurrent_rw"],
+  "timeout_seconds": 180
+}

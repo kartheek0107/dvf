@@ -1,0 +1,7 @@
+{
+  "name": "test_register_rw",
+  "category": "read_write",
+  "capabilities": ["mmio", "register_rw"],
+  "dependencies": [],
+  "timeout_seconds": 60
+}

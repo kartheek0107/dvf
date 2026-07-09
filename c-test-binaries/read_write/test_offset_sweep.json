@@ -1,0 +1,7 @@
+{
+  "name": "test_offset_sweep",
+  "category": "read_write",
+  "capabilities": ["mmio", "register_rw"],
+  "dependencies": ["read_write/test_register_rw"],
+  "timeout_seconds": 90
+}

@@ -107,11 +107,24 @@ type DeviceEntry struct {
 	QEMUDeviceName string            `json:"qemu_device_name"`
 	DriverModule   string            `json:"driver_module"`
 	DriverPath     string            `json:"driver_path"`
+	// DeviceNode is the /dev path created after the driver is loaded.
+	DeviceNode     string            `json:"device_node"`
 	Description    string            `json:"description"`
 	TargetModes    []string          `json:"target_modes"`
 	Capabilities   []string          `json:"capabilities"`
 	BARLayout      map[string]BARDef `json:"bar_layout"`
 	TestSuites     []string          `json:"test_suites"`
+
+	// Vishwa-specific fields — only populated for devices that run Vishwa tests.
+	// VishwaEnv contains environment variables required by the Vishwa OpenCL runtime.
+	VishwaEnv     map[string]string `json:"vishwa_env,omitempty"`
+	// VishwaLoader is the path to the musl/glibc loader inside the 9p share
+	// used to bypass the guest's system libc.
+	VishwaLoader  string            `json:"vishwa_loader,omitempty"`
+	// VishwaLibDir is the directory containing Vishwa shared libraries.
+	VishwaLibDir  string            `json:"vishwa_lib_dir,omitempty"`
+	// VishwaTestDir is the root directory for Vishwa test binaries inside the guest.
+	VishwaTestDir string            `json:"vishwa_test_dir,omitempty"`
 }
 
 // BARDef describes a PCI Base Address Register.

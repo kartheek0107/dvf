@@ -1,0 +1,7 @@
+{
+  "name": "test_patterns",
+  "category": "data_integrity",
+  "capabilities": ["mmio", "dma"],
+  "dependencies": ["read_write/test_register_rw"],
+  "timeout_seconds": 120
+}

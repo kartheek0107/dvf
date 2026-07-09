@@ -1,0 +1,7 @@
+{
+  "name": "test_concurrent_rw",
+  "category": "concurrency",
+  "capabilities": ["mmio", "concurrency"],
+  "dependencies": ["read_write/test_register_rw"],
+  "timeout_seconds": 150
+}

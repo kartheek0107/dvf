@@ -55,6 +55,7 @@ func TestBuildQEMUArgs(t *testing.T) {
 		{"virtio-disk", "if=virtio"},
 		{"console", "console=ttyS0"},
 		{"init", "init=/bin/bash"},
+		{"vm-id-cmdline", "dvf_vm_id=test-vm-1"},
 		{"memory", "-m 1024"},
 		{"cpus", "-smp 2"},
 		{"nographic", "-nographic"},
@@ -63,7 +64,9 @@ func TestBuildQEMUArgs(t *testing.T) {
 		{"qmp-socket", "unix:/tmp/dvf/qmp/test-vm-1.sock"},
 		{"qmp-server", "server,wait=off"},
 		{"device", "gp_gpu"},
-		{"network", "-nic user"},
+		// virtio-serial agent channel (always present — carries gRPC agent)
+		{"virtio-serial", "virtio-serial-pci"},
+		{"agent-port", "dvf.agent.0"},
 	}
 
 	for _, check := range checks {
@@ -154,16 +157,26 @@ func TestBuildQEMUArgsNoDevice(t *testing.T) {
 	}
 
 	args := mgr.BuildQEMUArgs("no-device-vm", vmCfg)
-	cmdLine := strings.Join(args, " ")
 
-	// Should NOT contain -device
+	// When no DeviceEntry is provided, the only -device flags that appear
+	// should be the always-present virtio-serial agent channel.
+	// No custom device-under-test should be appended.
+	allowedDevices := map[string]bool{
+		"virtio-serial-pci": true,
+	}
 	for i, arg := range args {
-		if arg == "-device" {
-			t.Errorf("expected no -device flag, but found: -device %s", args[i+1])
+		if arg == "-device" && i+1 < len(args) {
+			dev := args[i+1]
+			// Allow virtio-serial-pci and virtserialport (agent channel)
+			if !allowedDevices[dev] && !strings.HasPrefix(dev, "virtserialport") {
+				t.Errorf("unexpected -device flag: -device %s", dev)
+			}
 		}
 	}
 
+
 	// Should still have essential flags
+	cmdLine := strings.Join(args, " ")
 	if !strings.Contains(cmdLine, "-kernel") {
 		t.Error("missing -kernel flag")
 	}
@@ -171,3 +184,4 @@ func TestBuildQEMUArgsNoDevice(t *testing.T) {
 		t.Error("expected -m 512")
 	}
 }
+

@@ -25,13 +25,15 @@ type GRPCServer struct {
 	store    storage.Store
 	registry *config.DeviceRegistry
 	logger   *zap.Logger
+	engine   *core.ExecutionEngine
 }
 
 // NewGRPCServer creates a new gRPC server with all dependencies injected.
-func NewGRPCServer(store storage.Store, registry *config.DeviceRegistry, logger *zap.Logger) *GRPCServer {
+func NewGRPCServer(store storage.Store, registry *config.DeviceRegistry, engine *core.ExecutionEngine, logger *zap.Logger) *GRPCServer {
 	return &GRPCServer{
 		store:    store,
 		registry: registry,
+		engine:   engine,
 		logger:   logger,
 	}
 }
@@ -76,6 +78,11 @@ func (s *GRPCServer) SubmitTestRun(ctx context.Context, req *pb.SubmitTestRunReq
 	}
 
 	s.logger.Info("test run created", zap.String("id", created.ID))
+
+	// Submit test run to the execution engine
+	if s.engine != nil {
+		s.engine.SubmitTestRun(created)
+	}
 
 	return &pb.SubmitTestRunResponse{
 		TestRun: testRunToProto(created),

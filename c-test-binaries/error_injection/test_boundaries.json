@@ -1,0 +1,7 @@
+{
+  "name": "test_boundaries",
+  "category": "error_injection",
+  "capabilities": ["mmio", "bounds_checking"],
+  "dependencies": ["read_write/test_register_rw"],
+  "timeout_seconds": 90
+}

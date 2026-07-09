@@ -1,0 +1,7 @@
+{
+  "name": "test_persistence",
+  "category": "data_integrity",
+  "capabilities": ["mmio", "dma"],
+  "dependencies": ["data_integrity/test_patterns"],
+  "timeout_seconds": 120
+}

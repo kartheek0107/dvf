@@ -7,6 +7,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"go.uber.org/zap"
@@ -19,6 +20,7 @@ import (
 	"github.com/kartheekbudime/driver-validation-suite/go-orchestrator/internal/storage"
 	pb "github.com/kartheekbudime/driver-validation-suite/go-orchestrator/proto/agentpb"
 )
+
 
 // AgentServer implements the AgentService gRPC interface.
 type AgentServer struct {
@@ -120,13 +122,33 @@ func (s *AgentServer) GetCommand(ctx context.Context, req *pb.GetCommandRequest)
 		zap.String("type", cmd.Type),
 	)
 
+	// The proto Command.parameters is map<string,string>. AgentCommand.Parameters
+	// is map[string]interface{} so it can carry nested maps (e.g. the vishwa env
+	// dict). We JSON-encode any non-string value before putting it into the proto
+	// map; the agent is expected to json.loads() fields it knows are structured.
+	protoParams := make(map[string]string, len(cmd.Parameters))
+	for k, v := range cmd.Parameters {
+		switch sv := v.(type) {
+		case string:
+			protoParams[k] = sv
+		default:
+			encoded, err := json.Marshal(sv)
+			if err != nil {
+				protoParams[k] = fmt.Sprintf("%v", sv)
+			} else {
+				protoParams[k] = string(encoded)
+			}
+		}
+	}
+
 	return &pb.Command{
 		CommandId:  cmd.ID,
 		Type:       cmd.Type,
-		Parameters: cmd.Parameters,
+		Parameters: protoParams,
 		IssuedAt:   timestamppb.Now(),
 	}, nil
 }
+
 
 // ReportResult is called by the agent to report the result of a completed command.
 func (s *AgentServer) ReportResult(ctx context.Context, req *pb.ReportResultRequest) (*pb.ReportResultResponse, error) {

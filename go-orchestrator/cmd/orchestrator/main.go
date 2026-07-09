@@ -74,19 +74,21 @@ func main() {
 
 	// --- Initialize Agent Coordinator ---
 	agentCoord := core.NewAgentCoordinator()
-	logger.Info("agent coordinator initialized")
+
+	// --- Initialize VirtioSerialHub (replaces AgentService gRPC) ---
+	// The hub owns the host-side Unix sockets and bridges virtio-serial
+	// JSON messages to/from the AgentCoordinator.
+	virtioHub := vm.NewVirtioSerialHub(agentCoord, logger.Named("virtio"))
+	logger.Info("agent coordinator + virtio hub initialized")
 
 	// --- Initialize Scheduler + Execution Engine ---
 	scheduler := core.NewScheduler(cfg.VMDefaults.MaxConcurrentVMs)
 
-	// The execution engine needs a VMManagerInterface adapter.
-	// For now, we pass nil for the agent coordinator in the engine
-	// since the agent flow is optional until guest agents are deployed.
 	engine := core.NewExecutionEngine(
 		scheduler,
 		store,
 		registry,
-		nil, // VM manager adapter — wired below
+		&vmManagerAdapter{m: vmManager, hub: virtioHub},
 		agentCoord,
 		cfg,
 		logger.Named("engine"),
@@ -110,12 +112,18 @@ func main() {
 	)
 
 	// Register the orchestrator service
-	orchServer := api.NewGRPCServer(store, registry, logger)
+	orchServer := api.NewGRPCServer(store, registry, engine, logger)
 	orchServer.RegisterWith(grpcServer)
 
 	// Register the agent service
+	// ponytail: AgentService gRPC is kept for potential future remote agents;
+	// local QEMU agents use virtio-serial via VirtioSerialHub instead.
 	agentServer := api.NewAgentServer(store, agentCoord, logger.Named("agent"))
 	agentServer.RegisterWith(grpcServer)
+
+	// Register the telemetry service
+	telemetryServer := api.NewTelemetryServer(logger.Named("telemetry"))
+	telemetryServer.RegisterWith(grpcServer)
 
 	// Enable gRPC reflection for debugging with grpcurl
 	reflection.Register(grpcServer)
@@ -162,10 +170,6 @@ func main() {
 		)
 	}
 
-	// Keep references to avoid unused import errors
-	_ = vmManager
-	_ = agentCoord
-
 	// --- Graceful Shutdown ---
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -199,4 +203,38 @@ func loggingInterceptor(logger *zap.Logger) grpc.UnaryServerInterceptor {
 		}
 		return resp, err
 	}
+}
+
+// vmManagerAdapter adapts the concrete vm.VMManager to the core.VMManagerInterface.
+type vmManagerAdapter struct {
+	m   *vm.VMManager
+	hub *vm.VirtioSerialHub
+}
+
+func (a *vmManagerAdapter) CreateVM(ctx context.Context, vmCfg interface{}) (*core.VMInstance, error) {
+	device, ok := vmCfg.(*config.DeviceEntry)
+	if !ok {
+		return nil, fmt.Errorf("invalid vm config type: %T", vmCfg)
+	}
+	return a.m.CreateVM(ctx, &vm.VMConfig{
+		DeviceEntry: device,
+	})
+}
+
+func (a *vmManagerAdapter) StartVM(ctx context.Context, vmID string) error {
+	if err := a.m.StartVM(ctx, vmID); err != nil {
+		return err
+	}
+	// Wire the virtio-serial hub after the VM starts (socket is now created by QEMU)
+	a.hub.ConnectVM(ctx, vmID)
+	return nil
+}
+
+func (a *vmManagerAdapter) StopVM(ctx context.Context, vmID string) error {
+	a.hub.DisconnectVM(vmID)
+	return a.m.StopVM(ctx, vmID)
+}
+
+func (a *vmManagerAdapter) DestroyVM(ctx context.Context, vmID string) error {
+	return a.m.DestroyVM(ctx, vmID)
 }

@@ -117,11 +117,16 @@ func (m *VMManager) BuildQEMUArgs(vmID string, vmCfg *VMConfig) []string {
 	}
 	qmpSocket := filepath.Join(socketDir, vmID+".sock")
 
+	// virtio-serial socket: host side is a Unix socket the orchestrator reads/writes;
+	// guest side is /dev/virtio-ports/dvf.agent.0
+	agentSocket := filepath.Join("/tmp/dvf/agent", vmID+".sock")
+
 	args := []string{
 		// Kernel + rootfs
 		"-kernel", kernelPath,
 		"-drive", fmt.Sprintf("file=%s,format=raw,if=virtio", rootfsPath),
-		"-append", fmt.Sprintf("root=/dev/vda console=ttyS0 rw init=/bin/bash"),
+		// Pass vm_id on cmdline so the agent can self-identify without networking
+		"-append", fmt.Sprintf("root=/dev/vda console=ttyS0 rw init=/bin/bash dvf_vm_id=%s", vmID),
 
 		// Resources
 		"-m", strconv.Itoa(memMB),
@@ -136,8 +141,11 @@ func (m *VMManager) BuildQEMUArgs(vmID string, vmCfg *VMConfig) []string {
 		// QMP control socket
 		"-qmp", fmt.Sprintf("unix:%s,server,wait=off", qmpSocket),
 
-		// Network — user-mode with SSH forwarding for the agent
-		"-nic", "user,model=virtio-net-pci,hostfwd=tcp::0-:22",
+		// virtio-serial bus + agent channel
+		// ponytail: single chardev per VM; upgrade to multi-port if needed
+		"-chardev", fmt.Sprintf("socket,id=agent-chr,path=%s,server=on,wait=off", agentSocket),
+		"-device", "virtio-serial-pci",
+		"-device", "virtserialport,chardev=agent-chr,name=dvf.agent.0",
 	}
 
 	// Device under test
@@ -213,10 +221,13 @@ func (m *VMManager) StartVM(ctx context.Context, vmID string) error {
 		return fmt.Errorf("getting VM %s: %w", vmID, err)
 	}
 
-	// Ensure socket directory exists
+	// Ensure socket directories exist (QMP + agent)
 	socketDir := filepath.Dir(instance.QMPSocketPath)
 	if err := os.MkdirAll(socketDir, 0755); err != nil {
 		return fmt.Errorf("creating socket dir %s: %w", socketDir, err)
+	}
+	if err := os.MkdirAll("/tmp/dvf/agent", 0755); err != nil {
+		return fmt.Errorf("creating agent socket dir: %w", err)
 	}
 
 	// Clean up stale socket

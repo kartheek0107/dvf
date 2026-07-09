@@ -30,6 +30,11 @@ type VMManagerInterface interface {
 
 // AgentCoordinatorInterface abstracts the agent coordination layer.
 type AgentCoordinatorInterface interface {
+	// RegisterVM prepares the coordinator to receive an agent for the given VM.
+	RegisterVM(vmID string)
+	// UnregisterVM cleans up agent state for a VM.
+	UnregisterVM(vmID string)
+
 	// WaitForAgent blocks until the agent in the given VM registers, or
 	// until the context is cancelled.
 	WaitForAgent(ctx context.Context, vmID string) error
@@ -41,9 +46,9 @@ type AgentCoordinatorInterface interface {
 
 // AgentCommand represents a command to send to a guest agent.
 type AgentCommand struct {
-	ID         string            `json:"id"`
-	Type       string            `json:"type"` // "load_driver", "start_test", "shutdown"
-	Parameters map[string]string `json:"parameters"`
+	ID         string                 `json:"id"`
+	Type       string                 `json:"type"` // "load_driver", "verify_device", "start_test", "shutdown"
+	Parameters map[string]interface{} `json:"parameters"`
 }
 
 // AgentResult represents the result of a command executed by the guest agent.
@@ -208,7 +213,14 @@ func (e *ExecutionEngine) executeTestRun(ctx context.Context, run *TestRun) erro
 	// Update the test run with the VM ID
 	run.VMID = vmInstance.ID
 
+	if e.agentCoord != nil {
+		e.agentCoord.RegisterVM(vmInstance.ID)
+	}
+
 	if err := e.vmManager.StartVM(runCtx, vmInstance.ID); err != nil {
+		if e.agentCoord != nil {
+			e.agentCoord.UnregisterVM(vmInstance.ID)
+		}
 		e.vmManager.DestroyVM(runCtx, vmInstance.ID)
 		e.store.UpdateTestRunStatus(runCtx, run.ID, TestRunStatusErrored,
 			fmt.Sprintf("VM start failed: %v", err))
@@ -218,6 +230,9 @@ func (e *ExecutionEngine) executeTestRun(ctx context.Context, run *TestRun) erro
 	// Ensure we clean up the VM no matter what
 	defer func() {
 		e.logger.Info("tearing down VM", zap.String("vm_id", vmInstance.ID))
+		if e.agentCoord != nil {
+			e.agentCoord.UnregisterVM(vmInstance.ID)
+		}
 		e.vmManager.StopVM(context.Background(), vmInstance.ID)
 		e.vmManager.DestroyVM(context.Background(), vmInstance.ID)
 	}()
@@ -240,8 +255,8 @@ func (e *ExecutionEngine) executeTestRun(ctx context.Context, run *TestRun) erro
 		loadCmd := &AgentCommand{
 			ID:   fmt.Sprintf("cmd-load-%s", run.ID),
 			Type: "load_driver",
-			Parameters: map[string]string{
-				"module_path": device.DriverPath,
+			Parameters: map[string]interface{}{
+				"ko_path":     device.DriverPath,
 				"module_name": device.DriverModule,
 			},
 		}
@@ -259,14 +274,48 @@ func (e *ExecutionEngine) executeTestRun(ctx context.Context, run *TestRun) erro
 		}
 		e.logger.Info("driver loaded", zap.String("module", device.DriverModule))
 
+		// Vishwa suites require a verify_device step before the actual test.
+		if isVishwaSuite(run.TestSuiteID) {
+			verifyCmd := &AgentCommand{
+				ID:   fmt.Sprintf("cmd-verify-%s", run.ID),
+				Type: "verify_device",
+				Parameters: map[string]interface{}{
+					"device_node": device.DeviceNode,
+				},
+			}
+			verifyResult, verifyErr := e.agentCoord.SendCommand(runCtx, vmInstance.ID, verifyCmd)
+			if verifyErr != nil || verifyResult.Status != "passed" {
+				errMsg := "device verification failed"
+				if verifyErr != nil {
+					errMsg = verifyErr.Error()
+				} else if verifyResult != nil {
+					errMsg = verifyResult.Output
+				}
+				e.store.UpdateTestRunStatus(runCtx, run.ID, TestRunStatusErrored, errMsg)
+				return fmt.Errorf("verifying device: %s", errMsg)
+			}
+			e.logger.Info("device verified", zap.String("node", device.DeviceNode))
+		}
+
 		// Step 6: Execute tests
-		testCmd := &AgentCommand{
-			ID:   fmt.Sprintf("cmd-test-%s", run.ID),
-			Type: "start_test",
-			Parameters: map[string]string{
-				"test_suite_id": run.TestSuiteID,
-				"device_id":     run.DeviceID,
-			},
+		// Build the start_test command — for Vishwa suites we embed the env map
+		// and binary_dir so the agent can run the test with the correct environment
+		// and working directory.
+		var testCmd *AgentCommand
+		if isVishwaSuite(run.TestSuiteID) {
+			cmds := vishwaCommandSequence(run, device)
+			// vishwaCommandSequence returns [load_driver, verify_device, start_test];
+			// we already sent load_driver and verify_device above, so use index 2.
+			testCmd = cmds[2]
+		} else {
+			testCmd = &AgentCommand{
+				ID:   fmt.Sprintf("cmd-test-%s", run.ID),
+				Type: "start_test",
+				Parameters: map[string]interface{}{
+					"test_suite_id": run.TestSuiteID,
+					"device_id":     run.DeviceID,
+				},
+			}
 		}
 
 		testResult, err := e.agentCoord.SendCommand(runCtx, vmInstance.ID, testCmd)
@@ -368,3 +417,99 @@ func mapAgentStatus(s string) TestRunStatus {
 		return TestRunStatusErrored
 	}
 }
+
+// isVishwaSuite returns true when the test suite ID starts with the "vishwa/"
+// prefix, indicating it requires the Vishwa OpenCL runtime environment.
+func isVishwaSuite(suiteID string) bool {
+	return len(suiteID) > 7 && suiteID[:7] == "vishwa/"
+}
+
+// vishwaCommandSequence builds the ordered command slice for a Vishwa test run:
+//
+//  1. load_driver   — insmod the driver .ko from the 9p share
+//  2. verify_device — ls the device node (orchestrator already called this
+//     before invoking vishwaCommandSequence; included here for completeness
+//     so callers that want the full slice can use it)
+//  3. start_test    — run the binary via the Vishwa loader with the full env
+//
+// The caller is expected to have already dispatched commands 1 and 2 and
+// should pass cmds[2] (start_test) to SendCommand.
+func vishwaCommandSequence(run *TestRun, device *config.DeviceEntry) []*AgentCommand {
+	// Derive the suite sub-path: "vishwa/opencl/vecadd" → "opencl/vecadd"
+	// and infer the binary name as the last path segment.
+	suitePath := run.TestSuiteID[7:] // strip "vishwa/"
+	segments := splitPath(suitePath)
+	binaryName := segments[len(segments)-1]
+
+	testDir := device.VishwaTestDir
+	if testDir == "" {
+		testDir = "/mnt/share/vishwa_tests"
+	}
+	libDir := device.VishwaLibDir
+	if libDir == "" {
+		libDir = "/mnt/share/vishwa_tests/lib"
+	}
+	loader := device.VishwaLoader
+	if loader == "" {
+		loader = "/mnt/share/vishwa_tests/lib/ld-linux-x86-64.so.2"
+	}
+
+	// Construct the full binary path and the directory to cd into.
+	binaryPath := testDir + "/" + suitePath + "/" + binaryName
+	binaryDir := testDir + "/" + suitePath
+
+	// Merge device-level Vishwa env with any run-level overrides.
+	env := make(map[string]interface{}, len(device.VishwaEnv))
+	for k, v := range device.VishwaEnv {
+		env[k] = v
+	}
+
+	return []*AgentCommand{
+		{
+			ID:   fmt.Sprintf("cmd-load-%s", run.ID),
+			Type: "load_driver",
+			Parameters: map[string]interface{}{
+				"ko_path":     device.DriverPath,
+				"module_name": device.DriverModule,
+			},
+		},
+		{
+			ID:   fmt.Sprintf("cmd-verify-%s", run.ID),
+			Type: "verify_device",
+			Parameters: map[string]interface{}{
+				"device_node": device.DeviceNode,
+			},
+		},
+		{
+			ID:   fmt.Sprintf("cmd-test-%s", run.ID),
+			Type: "start_test",
+			Parameters: map[string]interface{}{
+				"binary":      binaryPath,
+				"binary_dir":  binaryDir,
+				"loader":      loader,
+				"lib_dir":     libDir,
+				"timeout":     "60",
+				"env":         env,
+				// suite_name is passed so the agent can label logs
+				"suite_name":  run.TestSuiteID,
+				"binary_name": binaryName,
+			},
+		},
+	}
+}
+
+// splitPath splits a slash-separated path string into its segments.
+func splitPath(p string) []string {
+	var parts []string
+	start := 0
+	for i := 0; i <= len(p); i++ {
+		if i == len(p) || p[i] == '/' {
+			if i > start {
+				parts = append(parts, p[start:i])
+			}
+			start = i + 1
+		}
+	}
+	return parts
+}
+

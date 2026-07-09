@@ -1,0 +1,127 @@
+stages:
+  - build
+  - deploy
+  - test
+
+variables:
+  DVF_API_URL: "http://localhost:8080"
+  # Share directory on the CI runner (mirrors the QEMU 9p share).
+  # In production CI, this path must be available to the QEMU runner.
+  SHARE_DIR: "/home/kartheekbudime/qemu-rootfs/share"
+
+# ---------------------------------------------------------------------------
+# Build Go Orchestrator
+# ---------------------------------------------------------------------------
+build-orchestrator:
+  stage: build
+  image: golang:1.21-alpine
+  script:
+    - cd go-orchestrator
+    - go build -v ./...
+    - go test -v ./...
+
+# ---------------------------------------------------------------------------
+# Build C Test Binaries (existing DVF tests)
+# ---------------------------------------------------------------------------
+build-test-binaries:
+  stage: build
+  image: gcc:13-bookworm
+  script:
+    - apt-get update && apt-get install -y make
+    - cd c-test-binaries
+    - make -j4
+
+# ---------------------------------------------------------------------------
+# Build & Deploy Vishwa Artifacts to 9p Share
+#
+# This stage replicates what run_dvf_vishwa.sh steps 1-3 did manually:
+#   Step 1: Build the GPGPU driver .ko
+#   Step 2: Build the Vishwa test binaries
+#   Step 3: Copy everything to the 9p share directory
+#
+# The orchestrator + guest agent handle step 4 (execution inside the VM).
+# ---------------------------------------------------------------------------
+deploy-vishwa:
+  stage: deploy
+  image: ubuntu:22.04
+  needs:
+    - build-orchestrator
+  before_script:
+    - apt-get update && apt-get install -y
+        make gcc g++ linux-headers-generic
+        python3 python3-pip python3-venv git
+        cmake pkg-config
+  script:
+    # ---- Step 1: Build the GPGPU PCIe driver ----
+    - echo "=== Building GPGPU driver ==="
+    - make -C driver-source/gpgpu_driver -j4
+    - ls -la driver-source/gpgpu_driver/gpgpu_pcie_ep_driver.ko
+
+    # ---- Step 2: Build Vishwa test binaries ----
+    # The Vishwa source is expected under test-suites/vishwa/.
+    # Adjust the make target to match your Vishwa build system.
+    - echo "=== Building Vishwa tests ==="
+    - |
+      if [ -f test-suites/vishwa/Makefile ]; then
+        make -C test-suites/vishwa -j4
+      elif [ -f test-suites/vishwa/build.sh ]; then
+        bash test-suites/vishwa/build.sh
+      else
+        echo "WARN: No Vishwa build system found at test-suites/vishwa/ — skipping Vishwa build"
+      fi
+
+    # ---- Step 3: Copy artifacts to the 9p share ----
+    - echo "=== Deploying artifacts to ${SHARE_DIR} ==="
+    - mkdir -p "${SHARE_DIR}"
+
+    # Driver .ko
+    - cp driver-source/gpgpu_driver/gpgpu_pcie_ep_driver.ko "${SHARE_DIR}/"
+
+    # Vishwa test tree
+    - |
+      if [ -d test-suites/vishwa/build ]; then
+        mkdir -p "${SHARE_DIR}/vishwa_tests"
+        cp -r test-suites/vishwa/build/. "${SHARE_DIR}/vishwa_tests/"
+      fi
+
+    # Agent bootstrap script (so it is available from the guest on first boot)
+    - cp python-agent/agent/start_agent.sh "${SHARE_DIR}/"
+    - chmod +x "${SHARE_DIR}/start_agent.sh"
+
+    # Agent source + proto stubs (Option A: bundle via share, no rootfs changes)
+    - mkdir -p "${SHARE_DIR}/python-agent"
+    - cp -r python-agent/. "${SHARE_DIR}/python-agent/"
+
+    # Pre-build a Python venv with grpcio into the share so the guest
+    # can run the agent without any internet access or rootfs changes.
+    # ponytail: if the rootfs already has grpcio (Option B), remove this block.
+    - |
+      if ! python3 -c "import grpc" 2>/dev/null; then
+        python3 -m venv "${SHARE_DIR}/agent-venv"
+        "${SHARE_DIR}/agent-venv/bin/pip" install --quiet grpcio protobuf
+      else
+        python3 -m venv "${SHARE_DIR}/agent-venv"
+        "${SHARE_DIR}/agent-venv/bin/pip" install --quiet grpcio protobuf
+      fi
+
+    - echo "=== Deploy complete ==="
+    - ls -la "${SHARE_DIR}/"
+
+  artifacts:
+    paths:
+      - driver-source/gpgpu_driver/gpgpu_pcie_ep_driver.ko
+    expire_in: 1 day
+
+# ---------------------------------------------------------------------------
+# Analyze Impact & Trigger Orchestration (existing job)
+# ---------------------------------------------------------------------------
+orchestrate-validation:
+  stage: test
+  image: python:3.11-slim
+  needs:
+    - deploy-vishwa
+  before_script:
+    - apt-get update && apt-get install -y git
+  script:
+    # Run impact analyzer (compares last push to current HEAD)
+    - python3 scripts/ci_impact_analyzer.py --dry-run
