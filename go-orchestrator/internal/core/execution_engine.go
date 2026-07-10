@@ -200,6 +200,23 @@ func (e *ExecutionEngine) executeTestRun(ctx context.Context, run *TestRun) erro
 		return fmt.Errorf("device lookup: %w", err)
 	}
 
+	// Step 2b: Gate on target_mode.
+	// Devices like FPGA have target_modes:["fpga","hybrid"] and require a
+	// real physical PCIe device passed via VFIO. Trying to boot them via
+	// plain QEMU (no host= argument) causes an immediate QEMU exit.
+	// Skip such runs gracefully instead of creating a VM that will fail.
+	if !deviceSupportsQEMU(device.TargetModes) {
+		msg := fmt.Sprintf(
+			"skipped: device %q target_modes %v does not include 'qemu'; "+
+				"physical hardware passthrough required",
+			device.ID, device.TargetModes,
+		)
+		e.logger.Warn("skipping non-QEMU device", zap.String("device", device.ID),
+			zap.Strings("target_modes", device.TargetModes))
+		e.store.UpdateTestRunStatus(runCtx, run.ID, TestRunStatusCancelled, msg)
+		return nil // not an error — expected skip
+	}
+
 	// Step 3: Create + start VM
 	// We pass the device entry as a generic interface since VMManagerInterface
 	// uses interface{} for flexibility.
@@ -209,6 +226,7 @@ func (e *ExecutionEngine) executeTestRun(ctx context.Context, run *TestRun) erro
 			fmt.Sprintf("VM creation failed: %v", err))
 		return fmt.Errorf("creating VM: %w", err)
 	}
+
 
 	// Update the test run with the VM ID
 	run.VMID = vmInstance.ID
@@ -513,3 +531,19 @@ func splitPath(p string) []string {
 	return parts
 }
 
+// deviceSupportsQEMU returns true when the device's target_modes list
+// contains "qemu". Devices with only ["fpga"] or ["hybrid"] require a
+// physical PCIe passthrough via VFIO and cannot be tested using the
+// standard QEMU software-emulation path.
+func deviceSupportsQEMU(targetModes []string) bool {
+	// If no modes are declared, assume QEMU is supported (backwards-compat).
+	if len(targetModes) == 0 {
+		return true
+	}
+	for _, m := range targetModes {
+		if m == "qemu" {
+			return true
+		}
+	}
+	return false
+}

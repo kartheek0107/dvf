@@ -89,7 +89,10 @@ func (s *Scheduler) Release() {
 	}
 	s.mu.Unlock()
 
-	// Signal that a slot is available
+	// Signal that a slot is available.
+	// Use recover so a concurrent Close() doesn't panic with
+	// "send on closed channel" during graceful shutdown.
+	defer func() { recover() }()
 	select {
 	case s.notify <- struct{}{}:
 	default:
