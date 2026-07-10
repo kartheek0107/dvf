@@ -6,8 +6,10 @@
 package vm
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -178,18 +180,21 @@ func (m *VMManager) CreateVM(ctx context.Context, vmCfg *VMConfig) (*core.VMInst
 	qmpSocket := filepath.Join(socketDir, vmID+".sock")
 
 	deviceID := ""
+	qemuDeviceName := ""
 	imagePath := vmCfg.RootFSPath
 	if imagePath == "" {
 		imagePath = qCfg.RootFSPath
 	}
 	if vmCfg.DeviceEntry != nil {
 		deviceID = vmCfg.DeviceEntry.ID
+		qemuDeviceName = vmCfg.DeviceEntry.QEMUDeviceName
 	}
 
 	instance := &core.VMInstance{
 		ID:             vmID,
 		Status:         core.VMStatusCreating,
 		DeviceID:       deviceID,
+		QEMUDeviceName: qemuDeviceName,
 		QMPSocketPath:  qmpSocket,
 		AllocatedCPUs:  cpus,
 		AllocatedMemMB: memMB,
@@ -221,25 +226,30 @@ func (m *VMManager) StartVM(ctx context.Context, vmID string) error {
 		return fmt.Errorf("getting VM %s: %w", vmID, err)
 	}
 
-	// Ensure socket directories exist (QMP + agent)
+	// Ensure socket directories exist (QMP + agent) with 0777 permissions
 	socketDir := filepath.Dir(instance.QMPSocketPath)
-	if err := os.MkdirAll(socketDir, 0755); err != nil {
+	if err := os.MkdirAll(socketDir, 0777); err != nil {
 		return fmt.Errorf("creating socket dir %s: %w", socketDir, err)
 	}
-	if err := os.MkdirAll("/tmp/dvf/agent", 0755); err != nil {
+	os.Chmod(socketDir, 0777)
+
+	if err := os.MkdirAll("/tmp/dvf/agent", 0777); err != nil {
 		return fmt.Errorf("creating agent socket dir: %w", err)
 	}
+	os.Chmod("/tmp/dvf/agent", 0777)
+	os.Chmod("/tmp/dvf", 0777)
+
 
 	// Clean up stale socket
 	os.Remove(instance.QMPSocketPath)
 
 	// Look up device entry if we have a device ID
 	var vmCfg VMConfig
-	if instance.DeviceID != "" {
-		// We need the device entry from the registry. The manager doesn't
-		// hold the registry directly, so we reconstruct a minimal config.
+	if instance.QEMUDeviceName != "" {
+		// Use the stored QEMU device name (e.g. "gp_gpu"), NOT DeviceID
+		// (e.g. "gpgpu") — they differ and QEMU only knows the model name.
 		vmCfg.DeviceEntry = &config.DeviceEntry{
-			QEMUDeviceName: instance.DeviceID, // placeholder — caller should set this
+			QEMUDeviceName: instance.QEMUDeviceName,
 		}
 	}
 	vmCfg.MemoryMB = instance.AllocatedMemMB
@@ -255,15 +265,39 @@ func (m *VMManager) StartVM(ctx context.Context, vmID string) error {
 		zap.Int("arg_count", len(args)),
 	)
 
-	// Start the process
+	// Start the process, capturing stderr so startup errors are visible.
+	// Output goes to both a per-VM log file and an in-memory buffer.
+	qemuLogPath := filepath.Join("/tmp/dvf", "qemu-"+vmID+".log")
+	logFile, _ := os.OpenFile(qemuLogPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+
+	var stderrBuf bytes.Buffer
+	var stderrWriter io.Writer = &stderrBuf
+	if logFile != nil {
+		stderrWriter = io.MultiWriter(logFile, &stderrBuf)
+	}
+
 	cmd := exec.CommandContext(ctx, qemuBin, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: true, // New process group so we can kill it cleanly
 	}
+	cmd.Stderr = stderrWriter
+	cmd.Stdout = stderrWriter // QEMU prints some startup info to stdout too
+
+	m.logger.Info("QEMU command line",
+		zap.String("vm_id", vmID),
+		zap.String("log", qemuLogPath),
+		zap.Strings("args", append([]string{qemuBin}, args...)),
+	)
 
 	if err := cmd.Start(); err != nil {
+		if logFile != nil {
+			logFile.Close()
+		}
 		m.store.UpdateVMStatus(ctx, vmID, core.VMStatusError)
 		return fmt.Errorf("starting QEMU process: %w", err)
+	}
+	if logFile != nil {
+		go func() { cmd.Wait(); logFile.Close() }()
 	}
 
 	// Update status → BOOTING
@@ -273,6 +307,7 @@ func (m *VMManager) StartVM(ctx context.Context, vmID string) error {
 	m.logger.Info("QEMU process started",
 		zap.String("vm_id", vmID),
 		zap.Int("pid", cmd.Process.Pid),
+		zap.String("log_file", qemuLogPath),
 	)
 
 	// Wait for the QMP socket to appear, then connect

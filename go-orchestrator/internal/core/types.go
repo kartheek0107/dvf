@@ -101,20 +101,24 @@ type TestResult struct {
 
 // VMInstance represents a running QEMU virtual machine.
 type VMInstance struct {
-	ID              string     `json:"id"`
-	Status          VMStatus   `json:"status"`
-	DeviceID        string     `json:"device_id"`
-	QMPSocketPath   string     `json:"qmp_socket_path"`
-	SerialPorts     []string   `json:"serial_ports"`
-	PID             int        `json:"pid,omitempty"`
-	AllocatedCPUs   int        `json:"allocated_cpus"`
-	AllocatedMemMB  int        `json:"allocated_mem_mb"`
-	ImagePath       string     `json:"image_path"`
-	OverlayPath     string     `json:"overlay_path,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
-	AgentStatus     AgentStatus `json:"agent_status"`
-	LastHeartbeat   *time.Time `json:"last_heartbeat,omitempty"`
-	CurrentTestRunID string    `json:"current_test_run_id,omitempty"`
+	ID               string     `json:"id"`
+	Status           VMStatus   `json:"status"`
+	DeviceID         string     `json:"device_id"`
+	// QEMUDeviceName is the -device flag value (e.g. "gp_gpu"), which may
+	// differ from DeviceID (e.g. "gpgpu"). Stored here so StartVM can
+	// reconstruct the correct QEMU command without needing the registry.
+	QEMUDeviceName   string     `json:"qemu_device_name,omitempty"`
+	QMPSocketPath    string     `json:"qmp_socket_path"`
+	SerialPorts      []string   `json:"serial_ports"`
+	PID              int        `json:"pid,omitempty"`
+	AllocatedCPUs    int        `json:"allocated_cpus"`
+	AllocatedMemMB   int        `json:"allocated_mem_mb"`
+	ImagePath        string     `json:"image_path"`
+	OverlayPath      string     `json:"overlay_path,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+	AgentStatus      AgentStatus `json:"agent_status"`
+	LastHeartbeat    *time.Time `json:"last_heartbeat,omitempty"`
+	CurrentTestRunID string     `json:"current_test_run_id,omitempty"`
 }
 
 // TestSuite defines a collection of tests targeting a specific device and category.
