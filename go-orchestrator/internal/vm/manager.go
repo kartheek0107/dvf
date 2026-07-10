@@ -124,11 +124,16 @@ func (m *VMManager) BuildQEMUArgs(vmID string, vmCfg *VMConfig) []string {
 	agentSocket := filepath.Join("/tmp/dvf/agent", vmID+".sock")
 
 	args := []string{
-		// Kernel + rootfs
+		// Kernel + rootfs.
+		// -snapshot opens the image read-only and uses an in-memory
+		// temp overlay for all writes. This allows multiple VMs to share
+		// the same rootfs.ext4 simultaneously without write-lock conflicts.
 		"-kernel", kernelPath,
 		"-drive", fmt.Sprintf("file=%s,format=raw,if=virtio", rootfsPath),
+		"-snapshot",
 		// Pass vm_id on cmdline so the agent can self-identify without networking
 		"-append", fmt.Sprintf("root=/dev/vda console=ttyS0 rw init=/bin/bash dvf_vm_id=%s", vmID),
+
 
 		// Resources
 		"-m", strconv.Itoa(memMB),
