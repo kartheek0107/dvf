@@ -123,17 +123,19 @@ func (m *VMManager) BuildQEMUArgs(vmID string, vmCfg *VMConfig) []string {
 	// guest side is /dev/virtio-ports/dvf.agent.0
 	agentSocket := filepath.Join("/tmp/dvf/agent", vmID+".sock")
 
+	// Per-VM qcow2 overlay path — passed in as a parameter so StartVM
+	// can create it before calling BuildQEMUArgs.
+	overlayPath := filepath.Join("/tmp/dvf/overlays", vmID+".qcow2")
+
 	args := []string{
-		// Kernel + rootfs.
-		// -snapshot opens the image read-only and uses an in-memory
-		// temp overlay for all writes. This allows multiple VMs to share
-		// the same rootfs.ext4 simultaneously without write-lock conflicts.
+		// Kernel + per-VM qcow2 overlay.
+		// The overlay is backed by rootfs.ext4 (read-only base). QEMU
+		// never takes a write lock on rootfs.ext4, so multiple VMs can
+		// run simultaneously without file-lock conflicts.
 		"-kernel", kernelPath,
-		"-drive", fmt.Sprintf("file=%s,format=raw,if=virtio", rootfsPath),
-		"-snapshot",
+		"-drive", fmt.Sprintf("file=%s,format=qcow2,if=virtio", overlayPath),
 		// Pass vm_id on cmdline so the agent can self-identify without networking
 		"-append", fmt.Sprintf("root=/dev/vda console=ttyS0 rw init=/bin/bash dvf_vm_id=%s", vmID),
-
 
 		// Resources
 		"-m", strconv.Itoa(memMB),
@@ -259,6 +261,31 @@ func (m *VMManager) StartVM(ctx context.Context, vmID string) error {
 	}
 	vmCfg.MemoryMB = instance.AllocatedMemMB
 	vmCfg.CPUs = instance.AllocatedCPUs
+
+	// Create a per-VM qcow2 overlay backed by the read-only rootfs base image.
+	// This means rootfs.ext4 is never write-locked, allowing concurrent VMs.
+	overlaySrc := m.cfg.QEMU.RootFSPath
+	if instance.ImagePath != "" {
+		overlaySrc = instance.ImagePath
+	}
+	if err := os.MkdirAll("/tmp/dvf/overlays", 0777); err != nil {
+		return fmt.Errorf("creating overlay dir: %w", err)
+	}
+	overlayPath := filepath.Join("/tmp/dvf/overlays", vmID+".qcow2")
+	qemuImg := exec.CommandContext(ctx, "qemu-img", "create",
+		"-f", "qcow2",
+		"-b", overlaySrc,
+		"-F", "raw",
+		overlayPath,
+	)
+	if out, err := qemuImg.CombinedOutput(); err != nil {
+		return fmt.Errorf("creating qcow2 overlay for %s: %w\n%s", vmID, err, out)
+	}
+	m.logger.Info("qcow2 overlay created",
+		zap.String("vm_id", vmID),
+		zap.String("overlay", overlayPath),
+		zap.String("base", overlaySrc),
+	)
 
 	// Build QEMU command
 	args := m.BuildQEMUArgs(vmID, &vmCfg)
@@ -439,6 +466,12 @@ func (m *VMManager) DestroyVM(ctx context.Context, vmID string) error {
 
 	m.store.UpdateVMStatus(ctx, vmID, core.VMStatusDestroyed)
 	m.logger.Info("VM destroyed", zap.String("vm_id", vmID))
+
+	// Clean up per-VM qcow2 overlay
+	overlayPath := filepath.Join("/tmp/dvf/overlays", vmID+".qcow2")
+	if err := os.Remove(overlayPath); err == nil {
+		m.logger.Debug("removed qcow2 overlay", zap.String("path", overlayPath))
+	}
 
 	return nil
 }
