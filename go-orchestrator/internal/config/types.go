@@ -11,6 +11,7 @@ type GlobalConfig struct {
 	Storage    StorageConfig    `json:"storage"`
 	Telemetry  TelemetryConfig  `json:"telemetry"`
 	VMDefaults VMDefaultsConfig `json:"vm_defaults"`
+	Cluster    ClusterConfig    `json:"cluster"`
 }
 
 // ServerConfig defines the gRPC and REST server settings.
@@ -151,4 +152,27 @@ type BARDef struct {
 	Type        string `json:"type"`
 	SizeBytes   int    `json:"size_bytes"`
 	Description string `json:"description"`
+}
+
+// ClusterConfig controls multi-node orchestrator clustering behaviour.
+type ClusterConfig struct {
+	// NodeID is a stable unique identifier for this orchestrator node.
+	// Defaults to the system hostname if empty.
+	NodeID string `json:"node_id"`
+
+	// NodeRole is "leader" or "worker". Defaults to "leader" for single-node deployments.
+	NodeRole string `json:"node_role"`
+
+	// HeartbeatIntervalSec is how often this node posts its own heartbeat.
+	// 0 means no self-heartbeating (leader only mode).
+	HeartbeatIntervalSec int `json:"heartbeat_interval_seconds"`
+
+	// NodeHeartbeatTTLSec is how long until a node with no heartbeat is evicted.
+	NodeHeartbeatTTLSec int `json:"node_heartbeat_ttl_seconds"`
+
+	// HostCPUs overrides CPU budget for ResourceAllocator (0 = auto-detect).
+	HostCPUs int `json:"host_cpus"`
+
+	// HostMemMB overrides memory budget in MiB for ResourceAllocator (0 = auto-detect).
+	HostMemMB int `json:"host_mem_mb"`
 }

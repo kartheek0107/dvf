@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/kartheekbudime/driver-validation-suite/go-orchestrator/internal/cluster"
 	"github.com/kartheekbudime/driver-validation-suite/go-orchestrator/internal/storage"
 	pb "github.com/kartheekbudime/driver-validation-suite/go-orchestrator/proto/orchestratorpb"
 )
@@ -131,6 +132,62 @@ func (g *RESTGateway) RegisterHealthChecks(store storage.Store, extras ...Pinger
 	// Replace the composed handler so Handler() returns the new mux
 	g.handler = withCORS(mux)
 	g.logger.Info("health check endpoints registered", zap.Strings("paths", []string{"/healthz", "/readyz"}))
+}
+
+// RegisterClusterRoutes mounts the /cluster/* REST endpoints backed by the given NodeRegistry.
+//   - POST /cluster/heartbeat — register or refresh a node heartbeat
+//   - GET  /cluster/nodes     — list all known cluster members
+//
+// Must be called after RegisterHealthChecks.
+func (g *RESTGateway) RegisterClusterRoutes(registry *cluster.NodeRegistry) {
+	currentHandler := g.handler
+	mux := http.NewServeMux()
+
+	// POST /cluster/heartbeat
+	mux.HandleFunc("/cluster/heartbeat", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req cluster.HeartbeatRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.NodeID == "" {
+			http.Error(w, "node_id is required", http.StatusBadRequest)
+			return
+		}
+		registry.Register(req)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+
+	// GET /cluster/nodes
+	mux.HandleFunc("/cluster/nodes", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		nodes := registry.List()
+		body, err := json.Marshal(map[string]interface{}{
+			"nodes": nodes,
+			"count": len(nodes),
+		})
+		if err != nil {
+			http.Error(w, "serialisation error", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+	})
+
+	// All other routes fall through to the existing handler
+	mux.Handle("/", currentHandler)
+	g.handler = withCORS(mux)
+	g.logger.Info("cluster routes registered", zap.Strings("paths", []string{"/cluster/heartbeat", "/cluster/nodes"}))
 }
 
 // Handler returns the HTTP handler for the REST gateway.
