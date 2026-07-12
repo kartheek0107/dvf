@@ -22,6 +22,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 
 	"github.com/kartheekbudime/driver-validation-suite/go-orchestrator/internal/api"
+	"github.com/kartheekbudime/driver-validation-suite/go-orchestrator/internal/cluster"
 	"github.com/kartheekbudime/driver-validation-suite/go-orchestrator/internal/config"
 	"github.com/kartheekbudime/driver-validation-suite/go-orchestrator/internal/core"
 	"github.com/kartheekbudime/driver-validation-suite/go-orchestrator/internal/observability"
@@ -109,6 +110,19 @@ func main() {
 	}
 	defer store.Close()
 
+	// --- Initialize Resource Allocator ---
+	allocator := core.NewResourceAllocator(cfg.Cluster.HostCPUs, cfg.Cluster.HostMemMB)
+	logger.Info("resource allocator initialized", zap.String("budget", allocator.String()))
+
+	// --- Initialize Scheduler (before recovery, so RecoverState can re-enqueue) ---
+	scheduler := core.NewScheduler(cfg.VMDefaults.MaxConcurrentVMs)
+
+	// --- Crash Recovery: reconcile in-flight state from Postgres ---
+	recoveryCtx, recoveryCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	if err := core.RecoverState(recoveryCtx, store, scheduler, logger.Named("recovery")); err != nil {
+		logger.Warn("state recovery completed with error", zap.Error(err))
+	}
+	recoveryCancel()
 
 	// --- Initialize VM Manager ---
 	vmManager := vm.NewVMManager(cfg, store, logger.Named("vm"))
@@ -126,15 +140,21 @@ func main() {
 	virtioHub := vm.NewVirtioSerialHub(agentCoord, logger.Named("virtio"))
 	logger.Info("agent coordinator + virtio hub initialized")
 
-	// --- Initialize Scheduler + Execution Engine ---
-	scheduler := core.NewScheduler(cfg.VMDefaults.MaxConcurrentVMs)
+	// --- Initialize Cluster Node Registry ---
+	ttl := time.Duration(cfg.Cluster.NodeHeartbeatTTLSec) * time.Second
+	if ttl <= 0 {
+		ttl = 30 * time.Second
+	}
+	nodeRegistry := cluster.NewNodeRegistry(ttl)
 
+	// --- Initialize Execution Engine ---
 	engine := core.NewExecutionEngine(
 		scheduler,
 		store,
 		registry,
 		&vmManagerAdapter{m: vmManager, hub: virtioHub},
 		agentCoord,
+		allocator,
 		cfg,
 		logger.Named("engine"),
 		eventBus,
@@ -194,6 +214,32 @@ func main() {
 
 	// Register liveness/readiness probes with health dependencies
 	restGateway.RegisterHealthChecks(store, eventBus)
+
+	// Register cluster heartbeat and node list endpoints
+	restGateway.RegisterClusterRoutes(nodeRegistry)
+
+	// Self-register this node in the registry
+	nodeID := cfg.Cluster.NodeID
+	if nodeID == "" {
+		nodeID, _ = os.Hostname()
+	}
+	nodeRole := cluster.NodeRole(cfg.Cluster.NodeRole)
+	if nodeRole == "" {
+		nodeRole = cluster.NodeRoleLeader
+	}
+	nodeRegistry.Register(cluster.HeartbeatRequest{
+		NodeID:     nodeID,
+		Hostname:   nodeID,
+		GRPCAddr:   grpcAddr,
+		Role:       nodeRole,
+		TotalCPUs:  allocator.Available().TotalCPUs,
+		TotalMemMB: allocator.Available().TotalMemMB,
+	})
+	go nodeRegistry.RunEviction(ctx)
+	logger.Info("cluster node registered",
+		zap.String("node_id", nodeID),
+		zap.String("role", string(nodeRole)),
+	)
 
 	restAddr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.RESTPort)
 	restServer := &http.Server{

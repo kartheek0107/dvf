@@ -11,6 +11,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,6 +27,7 @@ import (
 	"github.com/kartheekbudime/driver-validation-suite/go-orchestrator/internal/observability"
 	"github.com/kartheekbudime/driver-validation-suite/go-orchestrator/internal/telemetry"
 )
+
 
 // VMManagerInterface abstracts the VM Manager so the engine can be tested
 // without needing a real QEMU installation.
@@ -82,6 +86,7 @@ type ExecutionEngine struct {
 	registry   *config.DeviceRegistry
 	vmManager  VMManagerInterface
 	agentCoord AgentCoordinatorInterface
+	allocator  *ResourceAllocator
 	logger     *zap.Logger
 	cfg        *config.GlobalConfig
 	eventBus   *telemetry.EventBus
@@ -99,6 +104,7 @@ func NewExecutionEngine(
 	registry *config.DeviceRegistry,
 	vmManager VMManagerInterface,
 	agentCoord AgentCoordinatorInterface,
+	allocator *ResourceAllocator,
 	cfg *config.GlobalConfig,
 	logger *zap.Logger,
 	eventBus *telemetry.EventBus,
@@ -111,6 +117,7 @@ func NewExecutionEngine(
 		registry:   registry,
 		vmManager:  vmManager,
 		agentCoord: agentCoord,
+		allocator:  allocator,
 		cfg:        cfg,
 		logger:     logger,
 		eventBus:   eventBus,
@@ -248,6 +255,16 @@ func (e *ExecutionEngine) executeTestRun(ctx context.Context, run *TestRun) erro
 		return fmt.Errorf("device lookup: %w", err)
 	}
 
+	// Step 2a: Load test suite
+	suite, err := e.loadTestSuite(run.TestSuiteID, device)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		e.store.UpdateTestRunStatus(runCtx, run.ID, TestRunStatusErrored,
+			fmt.Sprintf("failed to load test suite: %v", err))
+		return fmt.Errorf("failed to load test suite: %w", err)
+	}
+
 	// Step 2b: Gate on target_mode.
 	if !deviceSupportsQEMU(device.TargetModes) {
 		msg := fmt.Sprintf(
@@ -273,6 +290,31 @@ func (e *ExecutionEngine) executeTestRun(ctx context.Context, run *TestRun) erro
 		}
 		span.SetStatus(codes.Ok, "skipped non-QEMU device")
 		return nil
+	}
+
+	// Step 2c: Gate on Resource Allocator budget
+	neededCPUs := e.cfg.QEMU.DefaultCPUs
+	neededMem := e.cfg.QEMU.DefaultMemoryMB
+	alloc := Allocation{CPUs: neededCPUs, MemMB: neededMem}
+	if e.allocator != nil {
+		if !e.allocator.TryAcquire(alloc) {
+			msg := "waiting for resources"
+			e.logger.Info("insufficient resources, deferring test run",
+				zap.String("id", run.ID),
+				zap.Int("needed_cpus", alloc.CPUs),
+				zap.Int("needed_mem", alloc.MemMB),
+			)
+			if err := e.store.UpdateTestRunStatus(runCtx, run.ID, TestRunStatusPending, msg); err != nil {
+				e.logger.Error("failed to update test run status", zap.Error(err))
+			}
+			go func(r *TestRun) {
+				time.Sleep(2 * time.Second)
+				e.SubmitTestRun(r)
+			}(run)
+			span.SetStatus(codes.Ok, "deferred due to resource constraints")
+			return nil
+		}
+		defer e.allocator.Release(alloc)
 	}
 
 	// Step 3: Create + start VM
@@ -504,61 +546,21 @@ func (e *ExecutionEngine) executeTestRun(ctx context.Context, run *TestRun) erro
 		}
 
 		// Step 6: Execute tests
-		var testCmd *AgentCommand
-		if isVishwaSuite(run.TestSuiteID) {
-			cmds := vishwaCommandSequence(run, device)
-			testCmd = cmds[2]
-		} else {
-			testCmd = &AgentCommand{
-				ID:   fmt.Sprintf("cmd-test-%s", run.ID),
-				Type: "start_test",
-				Parameters: map[string]interface{}{
-					"test_suite_id": run.TestSuiteID,
-					"device_id":     run.DeviceID,
-				},
-			}
-		}
-
-		var testResult *AgentResult
-		err = func() error {
-			_, runTestsSpan := tr.Start(runCtx, "RunTests")
-			defer runTestsSpan.End()
-			var runTestsErr error
-			testResult, runTestsErr = e.agentCoord.SendCommand(runCtx, vmInstance.ID, testCmd)
-			if runTestsErr != nil {
-				runTestsSpan.RecordError(runTestsErr)
-				runTestsSpan.SetStatus(codes.Error, runTestsErr.Error())
-				return runTestsErr
-			}
-			return nil
-		}()
-
+		err = e.runWorkflow(runCtx, run, device, vmInstance, suite)
 		if err != nil {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, err.Error())
-			e.store.UpdateTestRunStatus(runCtx, run.ID, TestRunStatusErrored,
-				fmt.Sprintf("test execution failed: %v", err))
-			return fmt.Errorf("executing tests: %w", err)
+			e.store.UpdateTestRunStatus(runCtx, run.ID, TestRunStatusFailed,
+				fmt.Sprintf("workflow execution failed: %v", err))
+			return fmt.Errorf("executing workflow: %w", err)
 		}
-
-		// Step 7: Parse and store results
-		func() {
-			_, parseSpan := tr.Start(runCtx, "ProcessResults")
-			defer parseSpan.End()
-			if err := e.processResults(runCtx, run, testResult); err != nil {
-				parseSpan.RecordError(err)
-				parseSpan.SetStatus(codes.Error, err.Error())
-				e.logger.Warn("failed to process results",
-					zap.String("run_id", run.ID), zap.Error(err))
-			}
-		}()
 	} else {
 		// No agent coordinator — mark as passed for now (development mode)
 		e.logger.Warn("no agent coordinator configured, skipping test execution",
 			zap.String("run_id", run.ID))
 	}
 
-	// Step 8: Determine final status
+	// Step 7: Determine final status
 	results, _ := e.store.GetTestResults(runCtx, run.ID)
 	finalStatus := TestRunStatusPassed
 	for _, r := range results {
@@ -784,4 +786,305 @@ func deviceSupportsQEMU(targetModes []string) bool {
 		}
 	}
 	return false
+}
+
+// processResultsForStep parses the agent's test output and saves individual
+// test results to the store under the given step name.
+func (e *ExecutionEngine) processResultsForStep(ctx context.Context, run *TestRun, stepID string, agentResult *AgentResult) error {
+	if agentResult == nil || agentResult.Output == "" {
+		return nil
+	}
+
+	type rawResultItem struct {
+		Test       string             `json:"test"`
+		Status     string             `json:"status"`
+		DurationMs float64            `json:"duration_ms"`
+		Message    string             `json:"message"`
+		Metrics    map[string]float64 `json:"metrics"`
+	}
+
+	var rawResults []rawResultItem
+
+	// Try 1: Parse as a JSON object with a "results" field (Vishwa/DVF output format)
+	var objResult struct {
+		Results []rawResultItem `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(agentResult.Output), &objResult); err == nil && len(objResult.Results) > 0 {
+		rawResults = objResult.Results
+	} else {
+		// Try 2: Parse as a JSON array of test results
+		if err := json.Unmarshal([]byte(agentResult.Output), &rawResults); err != nil {
+			// If neither, store as a single result
+			result := &TestResult{
+				TestRunID:   run.ID,
+				TestName:    stepID,
+				Status:      mapAgentStatus(agentResult.Status),
+				DurationMs:  agentResult.DurationMs,
+				Message:     agentResult.Output,
+				Logs:        agentResult.Logs,
+				CompletedAt: time.Now().UTC(),
+			}
+			return e.store.SaveTestResult(ctx, result)
+		}
+	}
+
+	// Save each individual test result
+	for _, raw := range rawResults {
+		result := &TestResult{
+			TestRunID:   run.ID,
+			TestName:    raw.Test,
+			Status:      mapAgentStatus(raw.Status),
+			DurationMs:  int64(raw.DurationMs),
+			Message:     raw.Message,
+			Metrics:     raw.Metrics,
+			Logs:        agentResult.Logs,
+			CompletedAt: time.Now().UTC(),
+		}
+		if err := e.store.SaveTestResult(ctx, result); err != nil {
+			e.logger.Warn("failed to save test result",
+				zap.String("test", raw.Test), zap.Error(err))
+		}
+	}
+
+	return nil
+}
+
+type suiteJSON struct {
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Description    string `json:"description"`
+	TimeoutSeconds int    `json:"timeout_seconds"`
+	Tests          []struct {
+		Binary         string   `json:"binary"`
+		Description    string   `json:"description"`
+		TimeoutSeconds int      `json:"timeout_seconds"`
+		DependsOn      []string `json:"depends_on,omitempty"`
+	} `json:"tests"`
+	Steps          []WorkflowStep `json:"steps,omitempty"`
+}
+
+func (e *ExecutionEngine) loadTestSuite(suiteID string, device *config.DeviceEntry) (*TestSuite, error) {
+	if isVishwaSuite(suiteID) {
+		// Construct the Vishwa test step dynamically!
+		suitePath := suiteID[7:] // strip "vishwa/"
+		segments := splitPath(suitePath)
+		binaryName := segments[len(segments)-1]
+
+		testDir := device.VishwaTestDir
+		if testDir == "" {
+			testDir = "/mnt/share/vishwa_tests"
+		}
+
+		binaryPath := testDir + "/" + suitePath + "/" + binaryName
+
+		return &TestSuite{
+			ID:          suiteID,
+			Name:        "Vishwa Dynamic Suite",
+			Description: "Dynamically generated suite for Vishwa runtime environment",
+			Steps: []WorkflowStep{
+				{
+					ID:         suiteID,
+					TestBinary: binaryPath,
+					TimeoutSec: 180,
+					RetryMax:   1,
+				},
+			},
+		}, nil
+	}
+
+	paths := []string{
+		filepath.Join("/home/kartheekbudime/driver-validation-suite/test-suites", suiteID, "suite.json"),
+		filepath.Join("../test-suites", suiteID, "suite.json"),
+		filepath.Join("test-suites", suiteID, "suite.json"),
+	}
+
+	var data []byte
+	var err error
+	for _, p := range paths {
+		data, err = os.ReadFile(p)
+		if err == nil {
+			break
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("loading test suite %s: %w", suiteID, err)
+	}
+
+	var sj suiteJSON
+	if err := json.Unmarshal(data, &sj); err != nil {
+		return nil, fmt.Errorf("unmarshaling test suite %s: %w", suiteID, err)
+	}
+
+	ts := &TestSuite{
+		ID:          sj.ID,
+		Name:        sj.Name,
+		Description: sj.Description,
+		Timeout:     sj.TimeoutSeconds,
+	}
+
+	if len(sj.Steps) > 0 {
+		ts.Steps = sj.Steps
+	} else {
+		// Map tests to steps
+		ts.Steps = make([]WorkflowStep, len(sj.Tests))
+		for i, t := range sj.Tests {
+			binaryPath := t.Binary
+			if !strings.HasPrefix(binaryPath, "/") {
+				binaryPath = "/mnt/share/dvf_tests/" + binaryPath
+			}
+			stepID := t.Binary
+			ts.Steps[i] = WorkflowStep{
+				ID:         stepID,
+				TestBinary: binaryPath,
+				DependsOn:  t.DependsOn,
+				TimeoutSec: t.TimeoutSeconds,
+				RetryMax:   1, // default retry
+			}
+		}
+	}
+
+	return ts, nil
+}
+
+func (e *ExecutionEngine) runWorkflow(ctx context.Context, run *TestRun, device *config.DeviceEntry, vmInstance *VMInstance, suite *TestSuite) error {
+	w, err := NewWorkflow(suite.ID, run.ID, suite.Steps)
+	if err != nil {
+		return fmt.Errorf("failed to create workflow: %w", err)
+	}
+
+	type stepResult struct {
+		stepID string
+		status StepStatus
+		err    error
+	}
+
+	resultsChan := make(chan stepResult, len(suite.Steps))
+	running := make(map[string]bool)
+	var mu sync.Mutex
+
+	for {
+		mu.Lock()
+		if w.IsDone() {
+			mu.Unlock()
+			break
+		}
+
+		ready := w.Ready()
+		for _, stepID := range ready {
+			if running[stepID] {
+				continue
+			}
+			running[stepID] = true
+
+			stepDef, _ := w.StepDef(stepID)
+			_ = w.MarkRunning(stepID)
+
+			go func(def WorkflowStep) {
+				var finalErr error
+				var finalStatus StepStatus = StepStatusPassed
+
+				maxAttempts := def.RetryMax
+				if maxAttempts < 0 {
+					maxAttempts = 0
+				}
+
+				for attempt := 0; attempt <= maxAttempts; attempt++ {
+					stepCmd := &AgentCommand{
+						ID:   fmt.Sprintf("cmd-step-%s-%s-%d", run.ID, def.ID, attempt),
+						Type: "start_test",
+						Parameters: map[string]interface{}{
+							"binary":     def.TestBinary,
+							"timeout":    fmt.Sprintf("%d", def.TimeoutSec),
+							"suite_name": run.TestSuiteID,
+						},
+					}
+
+					if len(def.Args) > 0 {
+						stepCmd.Parameters["args"] = def.Args
+					}
+
+					if isVishwaSuite(run.TestSuiteID) {
+						suitePath := run.TestSuiteID[7:] // strip "vishwa/"
+						segments := splitPath(suitePath)
+						binaryName := segments[len(segments)-1]
+						testDir := device.VishwaTestDir
+						if testDir == "" {
+							testDir = "/mnt/share/vishwa_tests"
+						}
+						libDir := device.VishwaLibDir
+						if libDir == "" {
+							libDir = "/mnt/share/vishwa_tests/lib"
+						}
+						loader := device.VishwaLoader
+						if loader == "" {
+							loader = "/mnt/share/vishwa_tests/lib/ld-linux-x86-64.so.2"
+						}
+						binaryDir := testDir + "/" + suitePath
+
+						env := make(map[string]interface{}, len(device.VishwaEnv))
+						for k, v := range device.VishwaEnv {
+							env[k] = v
+						}
+
+						stepCmd.Parameters["loader"] = loader
+						stepCmd.Parameters["lib_dir"] = libDir
+						stepCmd.Parameters["binary_dir"] = binaryDir
+						stepCmd.Parameters["env"] = env
+						stepCmd.Parameters["binary_name"] = binaryName
+					}
+
+					var agentRes *AgentResult
+					stepCtx, cancel := context.WithTimeout(ctx, time.Duration(def.TimeoutSec+10)*time.Second)
+					agentRes, finalErr = e.agentCoord.SendCommand(stepCtx, vmInstance.ID, stepCmd)
+					cancel()
+
+					if finalErr == nil && agentRes.Status == "passed" {
+						finalStatus = StepStatusPassed
+						if err := e.processResultsForStep(ctx, run, def.ID, agentRes); err != nil {
+							e.logger.Warn("failed to process step results", zap.String("step", def.ID), zap.Error(err))
+						}
+						break
+					} else {
+						finalStatus = StepStatusFailed
+						if finalErr == nil {
+							finalErr = fmt.Errorf("step failed with status: %s, output: %s", agentRes.Status, agentRes.Output)
+							_ = e.processResultsForStep(ctx, run, def.ID, agentRes)
+						}
+					}
+
+					if attempt < maxAttempts {
+						e.logger.Info("retrying step", zap.String("step", def.ID), zap.Int("attempt", attempt+1))
+						time.Sleep(time.Duration(1<<attempt) * time.Second)
+					}
+				}
+
+				resultsChan <- stepResult{
+					stepID: def.ID,
+					status: finalStatus,
+					err:    finalErr,
+				}
+			}(stepDef)
+		}
+		mu.Unlock()
+
+		select {
+		case res := <-resultsChan:
+			mu.Lock()
+			delete(running, res.stepID)
+			if err := w.Advance(res.stepID, res.status); err != nil {
+				e.logger.Error("failed to advance workflow", zap.Error(err))
+			}
+			mu.Unlock()
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	p, f, sk := w.Summary()
+	e.logger.Info("workflow summary", zap.Int("passed", p), zap.Int("failed", f), zap.Int("skipped", sk))
+	if f > 0 || sk > 0 {
+		return fmt.Errorf("workflow execution completed with failures: %d failed, %d skipped", f, sk)
+	}
+
+	return nil
 }

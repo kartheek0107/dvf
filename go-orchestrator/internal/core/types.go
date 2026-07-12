@@ -121,16 +121,30 @@ type VMInstance struct {
 	CurrentTestRunID string     `json:"current_test_run_id,omitempty"`
 }
 
+// WorkflowStep is a single node in the DAG of tests within a suite.
+// DependsOn lists the IDs of steps that must complete successfully before
+// this step may begin. An empty DependsOn means the step is a root node.
+type WorkflowStep struct {
+	ID         string   `json:"id"`
+	TestBinary string   `json:"test_binary"`          // path to the binary inside the guest
+	Args       []string `json:"args,omitempty"`        // extra arguments for the binary
+	DependsOn  []string `json:"depends_on,omitempty"`  // upstream step IDs
+	RetryMax   int      `json:"retry_max,omitempty"`   // max retries on failure (0 = no retry)
+	TimeoutSec int      `json:"timeout_seconds,omitempty"`
+}
+
 // TestSuite defines a collection of tests targeting a specific device and category.
+// Steps, if non-empty, define a DAG workflow that supersedes BinaryPath.
 type TestSuite struct {
-	ID          string       `json:"id"`
-	Name        string       `json:"name"`
-	DeviceID    string       `json:"device_id"`
-	Category    TestCategory `json:"category"`
-	Description string       `json:"description"`
-	BinaryPath  string       `json:"binary_path"`
-	Timeout     int          `json:"timeout_seconds"`
-	Tags        []string     `json:"tags,omitempty"`
+	ID          string         `json:"id"`
+	Name        string         `json:"name"`
+	DeviceID    string         `json:"device_id"`
+	Category    TestCategory   `json:"category"`
+	Description string         `json:"description"`
+	BinaryPath  string         `json:"binary_path"`           // legacy: single binary
+	Steps       []WorkflowStep `json:"steps,omitempty"`       // DAG workflow steps
+	Timeout     int            `json:"timeout_seconds"`
+	Tags        []string       `json:"tags,omitempty"`
 }
 
 // SubmitTestRunRequest is the input for submitting a new test run.
