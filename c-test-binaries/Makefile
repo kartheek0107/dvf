@@ -23,7 +23,8 @@ TESTS := \
 	data_integrity/test_persistence \
 	concurrency/test_concurrent_rw \
 	stress_performance/test_throughput \
-	error_injection/test_boundaries
+	error_injection/test_boundaries \
+	interrupt_handling/test_irq_basic
 
 # Default share directory (override with: make install SHARE_DIR=...)
 SHARE_DIR ?= /home/kartheekbudime/qemu-rootfs/share

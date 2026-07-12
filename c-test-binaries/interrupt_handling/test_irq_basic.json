@@ -1,0 +1,11 @@
+{
+  "name": "test_irq_basic",
+  "category": "interrupt_handling",
+  "description": "Validates IRQ registration in /proc/interrupts, interrupt count increments on trigger, and no interrupt storm",
+  "env": {
+    "DVF_IRQ_NAME":        "",
+    "DVF_IRQ_TRIGGER_REG": "0"
+  },
+  "capabilities": ["mmio"],
+  "timeout_seconds": 30
+}
