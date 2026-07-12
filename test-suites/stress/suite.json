@@ -1,0 +1,18 @@
+{
+  "id": "stress",
+  "name": "Stress & Performance Tests",
+  "description": "High-load validation: throughput benchmarking, multi-threaded concurrent access. Extended timeouts to allow sustained load.",
+  "timeout_seconds": 600,
+  "tests": [
+    {
+      "binary": "stress_performance/test_throughput",
+      "description": "Register R/W throughput benchmark — operations/sec, MB/s",
+      "timeout_seconds": 180
+    },
+    {
+      "binary": "concurrency/test_concurrent_rw",
+      "description": "Multi-threaded concurrent R/W: writer-reader race, multi-writer, multi-register",
+      "timeout_seconds": 180
+    }
+  ]
+}

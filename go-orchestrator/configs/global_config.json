@@ -50,7 +50,7 @@
     "metrics_port": 9090,
     "trace_endpoint": "localhost:4317",
     "log_level": "info",
-    "log_format": "json"
+    "log_format": "console"
   },
   "vm_defaults": {
     "boot_timeout_seconds": 120,

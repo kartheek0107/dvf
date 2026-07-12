@@ -9,7 +9,7 @@
       "qemu_device_name": "gp_gpu",
       "driver_module": "gpgpu_pcie_ep_driver",
       "driver_path": "/mnt/share/gpgpu_pcie_ep_driver.ko",
-      "device_node": "/dev/gp_gpu",
+      "device_node": "/dev/gpgpu",
       "description": "CDAC custom PCIe GPGPU — simulated SM + DMA + MMU, vendorID=0x1222 deviceID=0x2221",
       "target_modes": ["qemu"],
       "capabilities": ["mmio", "dma", "mmu", "msix"],

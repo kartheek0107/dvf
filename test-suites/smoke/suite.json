@@ -1,0 +1,18 @@
+{
+  "id": "smoke",
+  "name": "Smoke Tests",
+  "description": "Quick sanity validation: driver loads, device node exists, basic register R/W and boundary checks. Targets dvf C test binaries.",
+  "timeout_seconds": 120,
+  "tests": [
+    {
+      "binary": "read_write/test_register_rw",
+      "description": "Basic register read/write verification",
+      "timeout_seconds": 30
+    },
+    {
+      "binary": "error_injection/test_boundaries",
+      "description": "BAR boundary access, zero-length R/W, device existence",
+      "timeout_seconds": 30
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "id": "regression",
+  "name": "Regression Tests",
+  "description": "Full functional coverage: all register offsets, data integrity patterns, error boundary conditions, and interrupt validation.",
+  "timeout_seconds": 600,
+  "tests": [
+    {
+      "binary": "read_write/test_register_rw",
+      "description": "Register read/write — all registers, readback verification",
+      "timeout_seconds": 60
+    },
+    {
+      "binary": "read_write/test_offset_sweep",
+      "description": "Byte-level offset sweep across the full BAR",
+      "timeout_seconds": 60
+    },
+    {
+      "binary": "data_integrity/test_patterns",
+      "description": "Walking-ones, walking-zeros, alternating and checkerboard patterns",
+      "timeout_seconds": 60
+    },
+    {
+      "binary": "data_integrity/test_persistence",
+      "description": "Write-then-reopen-then-read persistence verification",
+      "timeout_seconds": 60
+    },
+    {
+      "binary": "error_injection/test_boundaries",
+      "description": "Out-of-bounds access, zero-length operations, large offsets",
+      "timeout_seconds": 60
+    },
+    {
+      "binary": "interrupt_handling/test_irq_basic",
+      "description": "IRQ registration, count increment, and storm detection",
+      "timeout_seconds": 60
+    }
+  ]
+}
