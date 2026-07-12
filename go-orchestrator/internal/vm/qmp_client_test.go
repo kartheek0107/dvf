@@ -49,12 +49,10 @@ func newMockQMPServer(t *testing.T) *mockQMPServer {
 // 1. Send greeting
 // 2. Wait for qmp_capabilities
 // 3. Send success response
-func (m *mockQMPServer) accept(t *testing.T) {
-	t.Helper()
-
+func (m *mockQMPServer) accept() {
 	conn, err := m.listener.Accept()
 	if err != nil {
-		t.Fatalf("mock QMP accept failed: %v", err)
+		panic(err)
 	}
 	m.conn = conn
 	m.encoder = json.NewEncoder(conn)
@@ -75,46 +73,43 @@ func (m *mockQMPServer) accept(t *testing.T) {
 		},
 	}
 	if err := m.encoder.Encode(greeting); err != nil {
-		t.Fatalf("failed to send greeting: %v", err)
+		panic(err)
 	}
 
 	// Read qmp_capabilities command
 	var cmd QMPCommand
 	if err := m.decoder.Decode(&cmd); err != nil {
-		t.Fatalf("failed to read qmp_capabilities: %v", err)
+		panic(err)
 	}
 	if cmd.Execute != "qmp_capabilities" {
-		t.Fatalf("expected qmp_capabilities, got %q", cmd.Execute)
+		panic("expected qmp_capabilities command")
 	}
 
 	// Send success response
 	if err := m.encoder.Encode(map[string]interface{}{"return": map[string]interface{}{}}); err != nil {
-		t.Fatalf("failed to send capabilities response: %v", err)
+		panic(err)
 	}
 }
 
 // readCommand reads the next command from the client.
-func (m *mockQMPServer) readCommand(t *testing.T) QMPCommand {
-	t.Helper()
+func (m *mockQMPServer) readCommand() QMPCommand {
 	var cmd QMPCommand
 	if err := m.decoder.Decode(&cmd); err != nil {
-		t.Fatalf("failed to read command: %v", err)
+		panic(err)
 	}
 	return cmd
 }
 
 // sendResponse sends a success response with the given payload.
-func (m *mockQMPServer) sendResponse(t *testing.T, payload interface{}) {
-	t.Helper()
+func (m *mockQMPServer) sendResponse(payload interface{}) {
 	resp := map[string]interface{}{"return": payload}
 	if err := m.encoder.Encode(resp); err != nil {
-		t.Fatalf("failed to send response: %v", err)
+		panic(err)
 	}
 }
 
 // sendError sends an error response.
-func (m *mockQMPServer) sendError(t *testing.T, class, desc string) {
-	t.Helper()
+func (m *mockQMPServer) sendError(class, desc string) {
 	resp := map[string]interface{}{
 		"error": map[string]interface{}{
 			"class": class,
@@ -122,13 +117,12 @@ func (m *mockQMPServer) sendError(t *testing.T, class, desc string) {
 		},
 	}
 	if err := m.encoder.Encode(resp); err != nil {
-		t.Fatalf("failed to send error: %v", err)
+		panic(err)
 	}
 }
 
 // sendEvent sends an async event.
-func (m *mockQMPServer) sendEvent(t *testing.T, name string, data interface{}) {
-	t.Helper()
+func (m *mockQMPServer) sendEvent(name string, data interface{}) {
 	event := map[string]interface{}{
 		"event": name,
 		"data":  data,
@@ -138,7 +132,7 @@ func (m *mockQMPServer) sendEvent(t *testing.T, name string, data interface{}) {
 		},
 	}
 	if err := m.encoder.Encode(event); err != nil {
-		t.Fatalf("failed to send event: %v", err)
+		panic(err)
 	}
 }
 
@@ -171,7 +165,7 @@ func TestQMPConnect(t *testing.T) {
 	// Run the mock server handshake in background
 	done := make(chan struct{})
 	go func() {
-		mock.accept(t)
+		mock.accept()
 		close(done)
 	}()
 
@@ -201,7 +195,7 @@ func TestQMPQueryStatus(t *testing.T) {
 
 	client := NewQMPClient(mock.socketPath, testLogger())
 
-	go mock.accept(t)
+	go mock.accept()
 
 	ctx := context.Background()
 	if err := client.Connect(ctx); err != nil {
@@ -211,11 +205,11 @@ func TestQMPQueryStatus(t *testing.T) {
 
 	// Mock server: read the query-status command and respond
 	go func() {
-		cmd := mock.readCommand(t)
+		cmd := mock.readCommand()
 		if cmd.Execute != "query-status" {
 			t.Errorf("expected query-status, got %q", cmd.Execute)
 		}
-		mock.sendResponse(t, map[string]interface{}{
+		mock.sendResponse(map[string]interface{}{
 			"running": true,
 			"status":  "running",
 		})
@@ -242,7 +236,7 @@ func TestQMPCommandError(t *testing.T) {
 
 	client := NewQMPClient(mock.socketPath, testLogger())
 
-	go mock.accept(t)
+	go mock.accept()
 
 	ctx := context.Background()
 	if err := client.Connect(ctx); err != nil {
@@ -252,8 +246,8 @@ func TestQMPCommandError(t *testing.T) {
 
 	// Mock server: respond with an error
 	go func() {
-		mock.readCommand(t)
-		mock.sendError(t, "GenericError", "Device 'foo' not found")
+		mock.readCommand()
+		mock.sendError("GenericError", "Device 'foo' not found")
 	}()
 
 	_, err := client.Execute(ctx, "device_del", map[string]interface{}{"id": "foo"})
@@ -278,7 +272,7 @@ func TestQMPAsyncEvents(t *testing.T) {
 
 	client := NewQMPClient(mock.socketPath, testLogger())
 
-	go mock.accept(t)
+	go mock.accept()
 
 	ctx := context.Background()
 	if err := client.Connect(ctx); err != nil {
@@ -287,7 +281,7 @@ func TestQMPAsyncEvents(t *testing.T) {
 	defer client.Close()
 
 	// Send an async event from the mock server
-	mock.sendEvent(t, "SHUTDOWN", map[string]interface{}{
+	mock.sendEvent("SHUTDOWN", map[string]interface{}{
 		"guest":  false,
 		"reason": "host-qmp-quit",
 	})
@@ -311,7 +305,7 @@ func TestQMPEventsDuringCommand(t *testing.T) {
 
 	client := NewQMPClient(mock.socketPath, testLogger())
 
-	go mock.accept(t)
+	go mock.accept()
 
 	ctx := context.Background()
 	if err := client.Connect(ctx); err != nil {
@@ -321,19 +315,19 @@ func TestQMPEventsDuringCommand(t *testing.T) {
 
 	// Mock server: read a command, send an event FIRST, then the response
 	go func() {
-		cmd := mock.readCommand(t)
+		cmd := mock.readCommand()
 		if cmd.Execute != "query-status" {
 			t.Errorf("expected query-status, got %q", cmd.Execute)
 		}
 
 		// Send an event before the response — this is what makes QMP tricky
-		mock.sendEvent(t, "RTC_CHANGE", map[string]interface{}{"offset": 0})
+		mock.sendEvent("RTC_CHANGE", map[string]interface{}{"offset": 0})
 
 		// Small delay to ensure event is processed first
 		time.Sleep(50 * time.Millisecond)
 
 		// Now send the actual response
-		mock.sendResponse(t, map[string]interface{}{
+		mock.sendResponse(map[string]interface{}{
 			"running": true,
 			"status":  "running",
 		})
@@ -383,7 +377,7 @@ func TestQMPClose(t *testing.T) {
 
 	client := NewQMPClient(mock.socketPath, testLogger())
 
-	go mock.accept(t)
+	go mock.accept()
 
 	ctx := context.Background()
 	if err := client.Connect(ctx); err != nil {
@@ -412,7 +406,7 @@ func TestQMPExecuteAfterClose(t *testing.T) {
 
 	client := NewQMPClient(mock.socketPath, testLogger())
 
-	go mock.accept(t)
+	go mock.accept()
 
 	ctx := context.Background()
 	if err := client.Connect(ctx); err != nil {
