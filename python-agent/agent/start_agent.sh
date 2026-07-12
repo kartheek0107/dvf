@@ -1,25 +1,21 @@
 #!/bin/sh
 # DVF Agent Bootstrap — deployed to the 9p share by CI.
 #
-# This script is started inside the QEMU guest (e.g. from an init script or
-# via QEMU's -append initrd= parameter) to launch the Python agent.
+# This script is started inside the QEMU guest (from /etc/bash.bashrc
+# autostart hook) to launch the Python agent.
 #
 # The VM ID is read automatically from /proc/cmdline (dvf_vm_id=<id>)
 # so no side-channel is needed.
 #
-# The orchestrator is reachable at 10.0.2.2 via QEMU user-mode NAT.
-# Port 50051 is the default gRPC port configured in global_config.json.
+# Communication is via virtio-serial (/dev/virtio-ports/dvf.agent.0),
+# not networking. No gRPC, no protobuf, no pip dependencies.
 #
 # Usage (from inside the guest):
 #   /mnt/share/start_agent.sh
-#
-# Or, if Python is in the 9p share venv:
-#   AGENT_VENV=/mnt/share/agent-venv /mnt/share/start_agent.sh
 
 set -e
 
 SHARE_DIR="${SHARE_DIR:-/mnt/share}"
-ORCHESTRATOR_HOST="${ORCHESTRATOR_HOST:-10.0.2.2:50051}"
 
 # ---------------------------------------------------------------------------
 # 1. Ensure the 9p share is mounted
@@ -46,25 +42,19 @@ else
 fi
 
 echo "[start_agent] Using Python: ${PYTHON}"
-echo "[start_agent] Orchestrator: ${ORCHESTRATOR_HOST}"
 echo "[start_agent] Share dir:    ${SHARE_DIR}"
 
 # ---------------------------------------------------------------------------
-# 3. Add agent source (and proto stubs) to PYTHONPATH
+# 3. Add agent source to PYTHONPATH
 # ---------------------------------------------------------------------------
 AGENT_SRC="${SHARE_DIR}/python-agent"
-PROTO_GEN="${AGENT_SRC}/agent/proto_gen"
 
-export PYTHONPATH="${AGENT_SRC}:${PROTO_GEN}:${PYTHONPATH:-}"
+export PYTHONPATH="${AGENT_SRC}:${PYTHONPATH:-}"
 
 # ---------------------------------------------------------------------------
 # 4. Start the agent
-#    --skip-mount: mount_guest_filesystems() inside the agent is a no-op
-#                  because we already mounted above; pass --skip-mount to
-#                  avoid a duplicate mount warning.
+#    The agent auto-detects vm_id from /proc/cmdline, mounts filesystems,
+#    and communicates over /dev/virtio-ports/dvf.agent.0 (virtio-serial).
+#    No --host flag needed — no networking required.
 # ---------------------------------------------------------------------------
-exec "${PYTHON}" -m agent \
-    --host "${ORCHESTRATOR_HOST}" \
-    --mount "${SHARE_DIR}" \
-    --skip-mount \
-    "$@"
+exec "${PYTHON}" -m agent "$@"

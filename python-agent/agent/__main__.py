@@ -2,10 +2,20 @@
 """
 DVF Guest Agent — runs inside the QEMU VM.
 
-Lifecycle (executed in order):
-  1. On startup: mount 9p share + essential VFS (/proc, /sys, /dev)
-  2. Register with the orchestrator via gRPC
-  3. Poll for commands, execute them, report results back
+Communication: reads/writes newline-delimited JSON over
+/dev/virtio-ports/dvf.agent.0 (virtio-serial, no network needed).
+
+Protocol (see VirtioSerialHub in go-orchestrator for host side):
+
+  Guest → Host:
+    {"msg":"register","vm_id":"...","hostname":"...","agent_version":"1.0"}
+    {"msg":"heartbeat","vm_id":"...","state":"READY"}
+    {"msg":"result","command_id":"...","status":"passed","output":"...","logs":"...","duration_ms":100}
+    {"msg":"log","vm_id":"...","severity":"INFO","message":"..."}
+
+  Host → Guest:
+    {"msg":"ack","agent_id":"..."}
+    {"msg":"command","command_id":"...","cmd":"load_driver","params":{"ko_path":"..."}}
 
 Supported commands:
   - load_driver   : insmod a .ko from the 9p share
@@ -14,21 +24,9 @@ Supported commands:
   - start_test    : run a Vishwa (or generic) binary, stream logs, parse results
   - shutdown      : stop the agent loop
 
-Environment variables / parameters for start_test (Vishwa):
-  binary      — absolute path to test binary
-  binary_dir  — cd here before running (relative assets resolve correctly)
-  loader      — ld-linux path inside the 9p share (bypasses host glibc)
-  lib_dir     — LD_LIBRARY_PATH root for Vishwa libs
-  env         — JSON-encoded dict of extra env vars (OCL_ICD_VENDORS, etc.)
-  timeout     — seconds (default 60)
-
-Usage (inside guest):
-  python3 -m agent --vm-id <id> --host 10.0.2.2:50051
-
-Requires: grpcio, grpcio-tools, protobuf (pre-installed or in 9p share venv)
+Zero external dependencies — pure Python stdlib.
 """
 
-import argparse
 import json
 import os
 import platform
@@ -38,43 +36,31 @@ import sys
 import threading
 import time
 
-import grpc
-from google.protobuf.timestamp_pb2 import Timestamp
-
-# ponytail: generated stubs are imported from the proto output dir.
-# If running inside the VM the share mount has these pre-built.
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "proto_gen"))
-
-import agent_pb2
-import agent_pb2_grpc
-import telemetry_pb2
-import telemetry_pb2_grpc
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def now_ts():
-    """Return a protobuf Timestamp for the current time."""
-    ts = Timestamp()
-    ts.GetCurrentTime()
-    return ts
-
-
 def _run(cmd, **kwargs):
-    """Run a command and return (stdout+stderr, returncode)."""
-    result = subprocess.run(cmd, capture_output=True, text=True, **kwargs)
+    """Run a command and return (stdout+stderr, returncode).
+
+    Always injects a full PATH so tools like insmod/rmmod/mount are found
+    even when the agent starts from a minimal init environment with no PATH.
+    """
+    env = kwargs.pop("env", None) or os.environ.copy()
+    env.setdefault("PATH", "/sbin:/usr/sbin:/bin:/usr/bin:/usr/local/sbin:/usr/local/bin")
+    result = subprocess.run(cmd, capture_output=True, text=True, env=env, **kwargs)
     return (result.stdout + result.stderr).strip(), result.returncode
+
 
 
 def mount_guest_filesystems(mount_path: str = "/mnt/share"):
     """
     Mount the 9p host share and essential virtual filesystems.
 
-    Called once at agent startup — before RegisterAgent — so the share is
-    available when the first command arrives.  All mounts are best-effort;
-    the agent continues even if some are already mounted.
+    Called once at agent startup so the share is available when the
+    first command arrives.  All mounts are best-effort; the agent
+    continues even if some are already mounted.
     """
     print("[agent] Mounting essential filesystems...")
 
@@ -242,106 +228,151 @@ def parse_vishwa_output(output: str, suite_name: str, elapsed_ms: float) -> dict
 
 
 # ---------------------------------------------------------------------------
-# Agent
+# Agent — virtio-serial transport
 # ---------------------------------------------------------------------------
 
+VIRTIO_PORT = "/dev/virtio-ports/dvf.agent.0"
+
+
 class DVFAgent:
-    def __init__(self, vm_id: str, host: str, mount_path: str = "/mnt/share"):
+    def __init__(self, vm_id: str, port_path: str, mount_path: str = "/mnt/share"):
         self.vm_id = vm_id
-        self.host = host
+        self.port_path = port_path
         self.mount_path = mount_path
         self.agent_id: str | None = None
         self.heartbeat_interval = 5
         self.running = True
 
-        self.channel = grpc.insecure_channel(host)
-        self.agent_stub = agent_pb2_grpc.AgentServiceStub(self.channel)
-        self.telemetry_stub = telemetry_pb2_grpc.TelemetryServiceStub(self.channel)
+        # Thread-safe write lock for the virtio-serial port.
+        # Multiple threads (heartbeat, log streaming, result reporting)
+        # may write concurrently; the lock prevents interleaved JSON lines.
+        self._write_lock = threading.Lock()
+        self._port = None  # opened in run()
+
+    # ------------------------------------------------------------------ #
+    #  Virtio-serial I/O                                                   #
+    # ------------------------------------------------------------------ #
+
+    def _send(self, msg: dict):
+        """Write a single JSON line to the virtio-serial port (thread-safe).
+
+        Uses raw os.write() on the file descriptor — Python's buffered text-mode
+        IO stalls silently on character devices (/dev/vportNpN).
+        """
+        data = (json.dumps(msg, separators=(",", ":")) + "\n").encode("utf-8")
+        with self._write_lock:
+            os.write(self._fd, data)
+
+    def _recv(self) -> dict | None:
+        """Read one JSON line from the virtio-serial port. Returns None on EOF.
+
+        Uses raw os.read() byte-by-byte until newline — reliable on char devices.
+        """
+        buf = b""
+        while True:
+            try:
+                ch = os.read(self._fd, 1)
+            except OSError:
+                return None
+            if not ch:
+                return None
+            buf += ch
+            if ch == b"\n":
+                break
+        try:
+            return json.loads(buf.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            print(f"[agent] WARN: bad JSON from host: {buf!r}")
+            return {}
 
     # ------------------------------------------------------------------ #
     #  Registration / heartbeat                                           #
     # ------------------------------------------------------------------ #
 
     def register(self):
-        """Register this agent with the orchestrator."""
-        resp = self.agent_stub.RegisterAgent(agent_pb2.RegisterAgentRequest(
-            vm_id=self.vm_id,
-            hostname=platform.node(),
-            os_version=platform.platform(),
-            agent_version="1.1.0",
-            available_devices=detect_devices(),
-            timestamp=now_ts(),
-        ))
-        self.agent_id = resp.agent_id
-        self.heartbeat_interval = resp.heartbeat_interval_seconds
-        print(f"[agent] Registered as {self.agent_id}")
+        """Register this agent with the orchestrator via virtio-serial."""
+        self._send({
+            "msg": "register",
+            "vm_id": self.vm_id,
+            "hostname": platform.node(),
+            "os_version": platform.platform(),
+            "agent_version": "2.0.0",
+            "available_devices": detect_devices(),
+        })
+        # Wait for ack
+        ack = self._recv()
+        if ack and ack.get("msg") == "ack":
+            self.agent_id = ack.get("agent_id", f"agent-{self.vm_id}")
+            print(f"[agent] Registered as {self.agent_id}")
+        else:
+            # Fallback — proceed anyway
+            self.agent_id = f"agent-{self.vm_id}"
+            print(f"[agent] WARN: no ack received, using fallback ID {self.agent_id}")
 
     def heartbeat_loop(self):
         """Send periodic heartbeats in background."""
         while self.running:
             try:
-                self.agent_stub.Heartbeat(agent_pb2.HeartbeatRequest(
-                    agent_id=self.agent_id,
-                    vm_id=self.vm_id,
-                    state="READY",
-                    timestamp=now_ts(),
-                ))
+                self._send({
+                    "msg": "heartbeat",
+                    "vm_id": self.vm_id,
+                    "state": "READY",
+                })
             except Exception as e:
                 print(f"[agent] Heartbeat failed: {e}")
             time.sleep(self.heartbeat_interval)
 
     def command_loop(self):
-        """Poll for commands and execute them."""
+        """Read commands from virtio-serial and execute them."""
         while self.running:
-            try:
-                cmd = self.agent_stub.GetCommand(agent_pb2.GetCommandRequest(
-                    agent_id=self.agent_id,
-                    vm_id=self.vm_id,
-                ))
-                print(f"[agent] Got command: {cmd.type} ({cmd.command_id})")
-                self.execute(cmd)
-            except grpc.RpcError as e:
-                if e.code() == grpc.StatusCode.CANCELLED:
-                    break
-                print(f"[agent] GetCommand error: {e}")
-                time.sleep(2)
+            msg = self._recv()
+            if msg is None:
+                # EOF — host closed the connection
+                print("[agent] virtio-serial EOF, stopping")
+                break
+            if msg.get("msg") != "command":
+                continue
+            print(f"[agent] Got command: {msg.get('cmd')} ({msg.get('command_id')})")
+            self.execute(msg)
 
     # ------------------------------------------------------------------ #
     #  Command dispatch                                                   #
     # ------------------------------------------------------------------ #
 
-    def execute(self, cmd):
+    def execute(self, msg: dict):
         """Dispatch a command and report the result."""
+        cmd_id = msg.get("command_id", "")
+        cmd_type = msg.get("cmd", "")
+        params = msg.get("params", {})
         start = time.time()
         status = "passed"
         output = ""
         logs = ""
 
         try:
-            if cmd.type == "load_driver":
-                output, status = self._handle_load_driver(cmd.parameters)
+            if cmd_type == "load_driver":
+                output, status = self._handle_load_driver(params)
 
-            elif cmd.type == "unload_driver":
-                module = cmd.parameters.get("module", "")
+            elif cmd_type == "unload_driver":
+                module = params.get("module", "")
                 out, rc = _run(["rmmod", module])
                 output = out
                 status = "passed" if rc == 0 else "failed"
 
-            elif cmd.type == "verify_device":
-                output, status, logs = self._handle_verify_device(cmd.parameters)
+            elif cmd_type == "verify_device":
+                output, status, logs = self._handle_verify_device(params)
 
-            elif cmd.type == "start_test":
-                output, status, logs = self._handle_start_test(
-                    cmd.parameters, cmd.command_id)
+            elif cmd_type == "start_test":
+                output, status, logs = self._handle_start_test(params, cmd_id)
 
-            elif cmd.type == "shutdown":
+            elif cmd_type == "shutdown":
                 self.running = False
                 status = "passed"
                 output = "shutting down"
 
             else:
                 status = "errored"
-                output = f"unknown command type: {cmd.type}"
+                output = f"unknown command type: {cmd_type}"
 
         except Exception as e:
             status = "errored"
@@ -349,22 +380,21 @@ class DVFAgent:
 
         duration_ms = int((time.time() - start) * 1000)
 
-        # Stream summary log to telemetry
-        self._stream_log(f"Command {cmd.command_id} ({cmd.type}): {status}", "INFO")
+        # Stream summary log
+        self._stream_log(f"Command {cmd_id} ({cmd_type}): {status}", "INFO")
         if logs:
             self._stream_log(logs[:4096], "DEBUG")
 
         # Report result
-        self.agent_stub.ReportResult(agent_pb2.ReportResultRequest(
-            agent_id=self.agent_id,
-            command_id=cmd.command_id,
-            status=status,
-            output=output,
-            logs=logs,
-            duration_ms=duration_ms,
-            timestamp=now_ts(),
-        ))
-        print(f"[agent] Reported: {cmd.command_id} -> {status} ({duration_ms}ms)")
+        self._send({
+            "msg": "result",
+            "command_id": cmd_id,
+            "status": status,
+            "output": output,
+            "logs": logs,
+            "duration_ms": duration_ms,
+        })
+        print(f"[agent] Reported: {cmd_id} -> {status} ({duration_ms}ms)")
 
     # ------------------------------------------------------------------ #
     #  Command handlers                                                   #
@@ -418,7 +448,7 @@ class DVFAgent:
           - cd into binary_dir so relative assets (kernel.cl, input.jpg…) resolve
           - run via the Vishwa ld-linux loader to bypass guest glibc
           - apply the full env dict
-          - stream raw output line-by-line to TelemetryService
+          - stream raw output line-by-line to host via virtio-serial log messages
           - apply the 4-strategy parser to extract structured results
         """
         binary = params.get("binary", "")
@@ -450,9 +480,10 @@ class DVFAgent:
         except OSError:
             pass
 
-        # Build command: use Vishwa loader if provided
+        # Build command: use Vishwa loader if provided.
+        # NOTE: ld-linux-x86-64.so.2 requires space-separated args, NOT --opt=value.
         if loader and lib_dir:
-            cmd = [loader, f"--library-path={lib_dir}", binary]
+            cmd = [loader, "--library-path", lib_dir, binary]
         else:
             cmd = [binary]
 
@@ -520,20 +551,16 @@ class DVFAgent:
     # ------------------------------------------------------------------ #
 
     def _stream_log(self, message: str, severity: str = "INFO"):
-        """Send a single log entry to the telemetry service (best-effort)."""
+        """Send a single log entry to the host via virtio-serial (best-effort)."""
         try:
-            def gen():
-                yield telemetry_pb2.LogEntry(
-                    vm_id=self.vm_id,
-                    agent_id=self.agent_id or "",
-                    severity=severity,
-                    source="dvf-agent",
-                    message=message,
-                    timestamp=now_ts(),
-                )
-            self.telemetry_stub.StreamLogs(gen())
+            self._send({
+                "msg": "log",
+                "vm_id": self.vm_id,
+                "severity": severity,
+                "message": message[:4096],
+            })
         except Exception:
-            pass  # ponytail: telemetry is best-effort, never block the agent
+            pass  # telemetry is best-effort, never block the agent
 
     # ------------------------------------------------------------------ #
     #  Entry point                                                        #
@@ -541,12 +568,23 @@ class DVFAgent:
 
     def run(self):
         """Main entry point."""
-        self.register()
+        # Open the virtio-serial port as a raw file descriptor.
+        # O_RDWR | O_NOCTTY: read-write, don't make it the controlling terminal.
+        # Python's buffered text IO (open(..., 'r+')) stalls silently on char
+        # devices — raw fd I/O via os.read/os.write is the only reliable option.
+        print(f"[agent] Opening virtio-serial port (raw fd): {self.port_path}")
+        self._fd = os.open(self.port_path, os.O_RDWR | os.O_NOCTTY)
 
-        hb = threading.Thread(target=self.heartbeat_loop, daemon=True)
-        hb.start()
+        try:
+            self.register()
 
-        self.command_loop()
+            hb = threading.Thread(target=self.heartbeat_loop, daemon=True)
+            hb.start()
+
+            self.command_loop()
+        finally:
+            os.close(self._fd)
+
         print("[agent] Agent stopped.")
 
 
@@ -555,40 +593,57 @@ class DVFAgent:
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="DVF Guest Agent")
-    parser.add_argument(
-        "--vm-id",
-        default="",
-        help="VM ID assigned by orchestrator (auto-detected from /proc/cmdline if empty)",
-    )
-    parser.add_argument(
-        "--host",
-        default="10.0.2.2:50051",
-        help="Orchestrator gRPC address (default: QEMU user-mode NAT host)",
-    )
-    parser.add_argument(
-        "--mount",
-        default="/mnt/share",
-        help="9p share mount path inside the guest",
-    )
-    parser.add_argument(
-        "--skip-mount",
-        action="store_true",
-        help="Skip the initial filesystem mount step (useful for testing on host)",
-    )
-    args = parser.parse_args()
-
-    # Resolve VM ID — prefer CLI flag, fall back to /proc/cmdline
-    vm_id = args.vm_id or _read_vm_id_from_cmdline()
+    # Resolve VM ID — prefer env var, fall back to /proc/cmdline
+    vm_id = os.environ.get("DVF_VM_ID", "") or _read_vm_id_from_cmdline()
     if not vm_id:
-        print("[agent] ERROR: --vm-id is required (or dvf_vm_id=<id> on kernel cmdline)")
+        print("[agent] ERROR: dvf_vm_id not found on kernel cmdline")
         sys.exit(1)
 
-    # Mount filesystems before registering
-    if not args.skip_mount:
-        mount_guest_filesystems(args.mount)
+    print(f"[agent] VM ID: {vm_id}")
 
-    agent = DVFAgent(vm_id, args.host, args.mount)
+    # Mount filesystems before registering
+    mount_guest_filesystems("/mnt/share")
+
+    # Wait for virtio-serial port to appear.
+    # /dev/virtio-ports/dvf.agent.0 is a udev symlink (not created without udev).
+    # The raw device is /dev/vportNpN — scan dynamically since the bus index
+    # depends on QEMU's PCI enumeration order (vport1p1 is common, not vport0p0).
+    port_path = None
+    print("[agent] Waiting for virtio-serial port...")
+    for attempt in range(30):
+        # Preferred: udev symlink
+        if os.path.exists(VIRTIO_PORT):
+            port_path = VIRTIO_PORT
+            break
+        # Fallback: find any /dev/vportNpN device
+        try:
+            vports = sorted(f"/dev/{d}" for d in os.listdir("/dev")
+                            if d.startswith("vport"))
+            if vports:
+                port_path = vports[0]
+                print(f"[agent] Found raw vport device: {port_path}")
+                break
+        except Exception:
+            pass
+        if attempt == 5:
+            try:
+                all_vports = [d for d in os.listdir("/dev") if d.startswith("vport")]
+                print(f"[agent] /dev/vport* so far: {all_vports}")
+            except Exception:
+                pass
+        time.sleep(1)
+
+    if not port_path:
+        try:
+            all_vports = [d for d in os.listdir("/dev") if d.startswith("vport")]
+        except Exception:
+            all_vports = []
+        print(f"[agent] ERROR: no virtio-serial port found after 30s (found: {all_vports})")
+        sys.exit(1)
+
+    print(f"[agent] Using port: {port_path}")
+
+    agent = DVFAgent(vm_id, port_path, "/mnt/share")
     agent.run()
 
 
