@@ -14,21 +14,25 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 
 	"github.com/kartheekbudime/driver-validation-suite/go-orchestrator/internal/api"
 	"github.com/kartheekbudime/driver-validation-suite/go-orchestrator/internal/config"
 	"github.com/kartheekbudime/driver-validation-suite/go-orchestrator/internal/core"
 	"github.com/kartheekbudime/driver-validation-suite/go-orchestrator/internal/observability"
 	"github.com/kartheekbudime/driver-validation-suite/go-orchestrator/internal/storage"
+	"github.com/kartheekbudime/driver-validation-suite/go-orchestrator/internal/telemetry"
 	"github.com/kartheekbudime/driver-validation-suite/go-orchestrator/internal/vm"
 )
 
 func main() {
-	configDir := flag.String("config", "configs", "Path to configuration directory")
+	configDir   := flag.String("config", "configs", "Path to configuration directory")
+	storageMode := flag.String("storage", "memory", "Storage backend: 'memory' or 'postgres'")
 	flag.Parse()
 
 	// --- Load Configuration ---
@@ -56,14 +60,55 @@ func main() {
 		zap.Int("grpc_port", cfg.Server.GRPCPort),
 		zap.Int("rest_port", cfg.Server.RESTPort),
 		zap.Int("registered_devices", len(registry.Devices)),
+		zap.String("storage_mode", *storageMode),
 	)
 
+	// --- Initialize Distributed Tracing ---
+	_, traceShutdown, err := observability.InitTracer(cfg.Telemetry)
+	if err != nil {
+		logger.Fatal("failed to initialize tracer", zap.Error(err))
+	}
+	defer traceShutdown(context.Background())
+
+	// --- Initialize Audit Logger ---
+	auditLogger := observability.NewAuditLogger(logger)
+
+	// --- Initialize Event Bus ---
+	eventBus, err := telemetry.NewEventBus(cfg.Storage.Redis, logger.Named("eventbus"))
+	if err != nil {
+		logger.Warn("event bus setup finished with warning", zap.Error(err))
+	}
+	defer eventBus.Close()
+
 	// --- Initialize Storage ---
-	// Using in-memory store for now. Swap with Postgres when ready.
-	store := storage.NewMemoryStore()
+	var store storage.Store
+
+	if *storageMode == "postgres" {
+		dsn := cfg.Storage.Postgres.DSN()
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		pgStore, pgErr := storage.NewPostgresStore(ctx, dsn, cfg.Storage.Postgres.MaxConnections)
+		cancel()
+
+		if pgErr != nil {
+			logger.Warn("postgres unavailable — falling back to in-memory store",
+				zap.Error(pgErr),
+				zap.String("dsn_host", cfg.Storage.Postgres.Host),
+			)
+			store = storage.NewMemoryStore()
+		} else {
+			store = pgStore
+			logger.Info("storage initialized",
+				zap.String("backend", "postgres"),
+				zap.String("host", cfg.Storage.Postgres.Host),
+				zap.String("database", cfg.Storage.Postgres.Database),
+			)
+		}
+	} else {
+		store = storage.NewMemoryStore()
+		logger.Info("storage initialized", zap.String("backend", "memory"))
+	}
 	defer store.Close()
 
-	logger.Info("storage initialized", zap.String("backend", "memory"))
 
 	// --- Initialize VM Manager ---
 	vmManager := vm.NewVMManager(cfg, store, logger.Named("vm"))
@@ -92,6 +137,8 @@ func main() {
 		agentCoord,
 		cfg,
 		logger.Named("engine"),
+		eventBus,
+		auditLogger,
 	)
 	engine.Start()
 	defer engine.Stop()
@@ -108,11 +155,12 @@ func main() {
 	}
 
 	grpcServer := grpc.NewServer(
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.UnaryInterceptor(loggingInterceptor(logger)),
 	)
 
 	// Register the orchestrator service
-	orchServer := api.NewGRPCServer(store, registry, engine, logger)
+	orchServer := api.NewGRPCServer(store, registry, engine, logger, auditLogger)
 	orchServer.RegisterWith(grpcServer)
 
 	// Register the agent service
@@ -143,6 +191,9 @@ func main() {
 	if err := restGateway.Register(ctx); err != nil {
 		logger.Fatal("failed to register REST gateway", zap.Error(err))
 	}
+
+	// Register liveness/readiness probes with health dependencies
+	restGateway.RegisterHealthChecks(store, eventBus)
 
 	restAddr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.RESTPort)
 	restServer := &http.Server{
