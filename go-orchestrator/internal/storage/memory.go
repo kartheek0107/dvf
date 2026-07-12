@@ -115,6 +115,21 @@ func (m *MemoryStore) ListTestRuns(_ context.Context, req *core.ListTestRunsRequ
 	return results, nil
 }
 
+func (m *MemoryStore) ListRunningTestRuns(_ context.Context) ([]*core.TestRun, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var results []*core.TestRun
+	for _, run := range m.testRuns {
+		switch run.Status {
+		case core.TestRunStatusRunning, core.TestRunStatusQueued, core.TestRunStatusPending:
+			cp := *run
+			results = append(results, &cp)
+		}
+	}
+	return results, nil
+}
+
 // --- TestResultStore ---
 
 func (m *MemoryStore) SaveTestResult(_ context.Context, result *core.TestResult) error {
@@ -198,6 +213,21 @@ func (m *MemoryStore) ListVMs(_ context.Context, req *core.ListVMsRequest) ([]*c
 	return results, nil
 }
 
+func (m *MemoryStore) ListOrphanedVMs(_ context.Context) ([]*core.VMInstance, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var results []*core.VMInstance
+	for _, vm := range m.vms {
+		switch vm.Status {
+		case core.VMStatusCreating, core.VMStatusBooting, core.VMStatusRunningTest:
+			cp := *vm
+			results = append(results, &cp)
+		}
+	}
+	return results, nil
+}
+
 func (m *MemoryStore) DeleteVM(_ context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -218,3 +248,4 @@ func (m *MemoryStore) Ping(_ context.Context) error {
 func (m *MemoryStore) Close() error {
 	return nil
 }
+

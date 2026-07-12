@@ -20,6 +20,10 @@ type TestRunStore interface {
 
 	// ListTestRuns returns test runs matching the given filters.
 	ListTestRuns(ctx context.Context, req *core.ListTestRunsRequest) ([]*core.TestRun, error)
+
+	// ListRunningTestRuns returns all test runs in RUNNING, QUEUED, or PENDING state.
+	// Used on startup to reconcile in-flight work after a crash.
+	ListRunningTestRuns(ctx context.Context) ([]*core.TestRun, error)
 }
 
 // TestResultStore defines persistence operations for individual test results.
@@ -44,6 +48,10 @@ type VMStore interface {
 
 	// ListVMs returns VMs matching the given filters.
 	ListVMs(ctx context.Context, req *core.ListVMsRequest) ([]*core.VMInstance, error)
+
+	// ListOrphanedVMs returns VMs in transient states (CREATING, BOOTING, RUNNING_TEST)
+	// that were never properly torn down — typically left over after a crash.
+	ListOrphanedVMs(ctx context.Context) ([]*core.VMInstance, error)
 
 	// DeleteVM removes a VM record.
 	DeleteVM(ctx context.Context, id string) error

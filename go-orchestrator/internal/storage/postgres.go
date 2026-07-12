@@ -476,6 +476,83 @@ func (s *PostgresStore) DeleteVM(ctx context.Context, id string) error {
 	return err
 }
 
+// ListRunningTestRuns returns all test runs in non-terminal states.
+// Used by RecoverState on startup to reconcile in-flight work.
+func (s *PostgresStore) ListRunningTestRuns(ctx context.Context) ([]*core.TestRun, error) {
+	const q = `
+SELECT id, device_id, test_suite_id, status, COALESCE(vm_id,''),
+       priority, created_at, started_at, completed_at, duration_ms,
+       COALESCE(requested_by,''), tags, COALESCE(error_message,'')
+FROM test_runs
+WHERE status IN ('RUNNING','QUEUED','PENDING')
+ORDER BY created_at`
+
+	rows, err := s.pool.Query(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("listing running test runs: %w", err)
+	}
+	defer rows.Close()
+
+	var runs []*core.TestRun
+	for rows.Next() {
+		run := &core.TestRun{}
+		var tags []byte
+		if err := rows.Scan(
+			&run.ID, &run.DeviceID, &run.TestSuiteID, &run.Status, &run.VMID,
+			&run.Priority, &run.CreatedAt, &run.StartedAt, &run.CompletedAt, &run.DurationMs,
+			&run.RequestedBy, &tags, &run.ErrorMessage,
+		); err != nil {
+			return nil, fmt.Errorf("scanning test run: %w", err)
+		}
+		if len(tags) > 0 {
+			_ = json.Unmarshal(tags, &run.Tags)
+		}
+		runs = append(runs, run)
+	}
+	return runs, rows.Err()
+}
+
+// ListOrphanedVMs returns VMs in transient states that were never torn down.
+func (s *PostgresStore) ListOrphanedVMs(ctx context.Context) ([]*core.VMInstance, error) {
+	const q = `
+SELECT id, status, device_id, COALESCE(qemu_device_name,''),
+       COALESCE(qmp_socket_path,''), serial_ports,
+       pid, allocated_cpus, allocated_mem_mb,
+       COALESCE(image_path,''), COALESCE(overlay_path,''),
+       created_at, agent_status, last_heartbeat,
+       COALESCE(current_test_run_id,'')
+FROM vms
+WHERE status IN ('CREATING','BOOTING','RUNNING_TEST')
+ORDER BY created_at`
+
+	rows, err := s.pool.Query(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("listing orphaned vms: %w", err)
+	}
+	defer rows.Close()
+
+	var vms []*core.VMInstance
+	for rows.Next() {
+		vm := &core.VMInstance{}
+		var portsJSON []byte
+		if err := rows.Scan(
+			&vm.ID, &vm.Status, &vm.DeviceID, &vm.QEMUDeviceName,
+			&vm.QMPSocketPath, &portsJSON,
+			&vm.PID, &vm.AllocatedCPUs, &vm.AllocatedMemMB,
+			&vm.ImagePath, &vm.OverlayPath,
+			&vm.CreatedAt, &vm.AgentStatus, &vm.LastHeartbeat,
+			&vm.CurrentTestRunID,
+		); err != nil {
+			return nil, fmt.Errorf("scanning orphaned vm: %w", err)
+		}
+		if len(portsJSON) > 0 {
+			_ = json.Unmarshal(portsJSON, &vm.SerialPorts)
+		}
+		vms = append(vms, vm)
+	}
+	return vms, rows.Err()
+}
+
 // ─── Utility ─────────────────────────────────────────────────────────────────
 
 func (s *PostgresStore) Ping(ctx context.Context) error {
