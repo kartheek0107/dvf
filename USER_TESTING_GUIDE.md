@@ -4,25 +4,24 @@ This guide outlines how to use the **Device Validation Framework (DVF)** to vali
 
 ---
 
-## 1. Overview of the Validation Flow
+## 1. Step-by-Step Validation Workflow (What You Need to Do)
 
-When you submit a validation request, DVF automatically:
-1.  Acquires host CPU/Memory resources for the test run.
-2.  Launches a QEMU virtual machine containing your custom emulated PCI/accelerator device.
-3.  Mounts your test binaries and kernel modules into the guest OS.
-4.  Loads the driver kernel module (`insmod`).
-5.  Verifies the driver creates the expected device node under `/dev/`.
-6.  Executes your test suite (resolving dependencies and executing steps in parallel).
-7.  Unloads the driver, tears down the VM, and collects all logs, metrics, and results.
+Do not worry about the internal gRPC channels or virtual machines. Testing a device and driver involves four concrete steps:
 
----
+```mermaid
+graph TD
+    A[1. Place compiled driver & test binaries in c-test-binaries/] --> B[2. Add device entry to configs/device_registry.json]
+    B --> C[3. Create test suite configuration in test-suites/YOUR_SUITE/suite.json]
+    C --> D[4. Submit REST HTTP request to trigger run]
+```
 
-## 2. Step 1: Register Your Custom Device
+### Step 1: Copy files to `c-test-binaries/`
+All drivers and test binaries must live on the host system under the `c-test-binaries/` directory. The framework automatically mounts this directory inside the guest VM under `/mnt/share`.
+*   Your kernel module (e.g. `my_driver.ko`) should be placed in `c-test-binaries/drivers/my_driver.ko`.
+*   Your compiled test binaries should be placed in `c-test-binaries/read_write/test_register_rw`, etc.
 
-To let DVF know about your custom hardware and kernel module, add an entry to the `configs/device_registry.json` file. 
-
-### Configuration Example
-Add your device inside the `"devices"` array:
+### Step 2: Register the custom device
+Add your device inside the `"devices"` array in the host's `configs/device_registry.json` file:
 ```json
 {
   "id": "my-custom-accel",
@@ -35,60 +34,10 @@ Add your device inside the `"devices"` array:
   "test_suites": ["smoke", "stress"]
 }
 ```
+*Note that the `driver_path` points to `/mnt/share/...` because that is where the guest OS sees it.*
 
-### Key Field Descriptions
-*   `id`: A unique string identifier for your device used when submitting test runs.
-*   `qemu_device_name`: The exact device model name defined in your QEMU source code (passed to QEMU via the `-device` flag).
-*   `driver_module`: The name of the kernel module (as shown by `lsmod` after loading).
-*   `driver_path`: The path to the compiled `.ko` file *inside the guest*. The host's `c-test-binaries` or shared folder is mounted inside the guest under `/mnt/share`.
-*   `device_node`: The character/block device node path that your driver is expected to create upon successful registration.
-*   `target_modes`: Leave as `["qemu"]` for simulated software validation.
-
----
-
-## 3. Step 2: Format Your Test Binaries
-
-Your validation tests should be compiled C/C++ or executable Python binaries. 
-
-### Writing Your Tests
-To ensure the orchestrator correctly parses and displays individual test cases, your test binaries should print a structured JSON report to standard output upon completion.
-
-#### Expected JSON Output Format:
-```json
-{
-  "results": [
-    {
-      "test": "register_bounds_check",
-      "status": "passed",
-      "duration_ms": 15.2,
-      "message": "Successfully verified boundaries of BAR 0",
-      "metrics": {
-        "read_latency_ns": 45.0
-      }
-    },
-    {
-      "test": "dma_transfer_stress",
-      "status": "passed",
-      "duration_ms": 120.0,
-      "message": "Transferred 1GB data without corruption",
-      "metrics": {
-        "throughput_mbps": 850.5
-      }
-    }
-  ]
-}
-```
-
-*   **Exit Status**: If a test binary fails, it should return a non-zero exit code (e.g., `exit 1`). If it succeeds, it must return `0`.
-*   **Location**: Compile and place your test binaries under the `c-test-binaries/` directory so they are automatically shared with the guest VM.
-
----
-
-## 4. Step 3: Define Your Test Suite
-
-Test suites group multiple test binaries together and define execution order. Define your suite by creating a `suite.json` file in a sub-folder under `test-suites/<suite-id>/`.
-
-### Example: `test-suites/my-smoke-suite/suite.json`
+### Step 3: Create the test suite configuration
+Create a folder under the host's `test-suites/` directory (e.g., `test-suites/my-smoke-suite/`) and add a `suite.json` file inside it:
 ```json
 {
   "id": "my-smoke-suite",
@@ -111,65 +60,162 @@ Test suites group multiple test binaries together and define execution order. De
 }
 ```
 
-*   `binary`: The relative path to the binary under the `c-test-binaries/` directory.
-*   `depends_on`: List the paths of other test binaries that *must* pass before this test can run. This allows you to construct complex execution DAGs.
+### Step 4: Run the orchestrator and submit request
+1. Start the orchestrator service on the host:
+   ```bash
+   ./orchestrator --config configs --storage memory
+   ```
+2. Trigger the validation run by sending an HTTP POST request:
+   ```bash
+   curl -X POST http://localhost:8080/test-runs \
+     -H "Content-Type: application/json" \
+     -d '{
+       "device_id": "my-custom-accel",
+       "test_suite_id": "my-smoke-suite",
+       "priority": 1,
+       "requested_by": "hardware-engineer"
+     }'
+   ```
+3. The framework will automatically boot the VM, load your driver, verify `/dev/my_accel0` exists, run your test binaries in topological order, and shutdown the VM.
 
 ---
 
-## 5. Step 4: Run Your Validation Suite
+## 2. How to Write Test Binaries that Output JSON
 
-Once your device is registered, tests are compiled, and the suite is defined, you can trigger a validation run via the DVF REST API.
+The framework's guest agent executes each test binary and captures its standard output (`stdout`). To record individual test assertions, duration, and key hardware metrics, your binary **must print a structured JSON object to stdout** before exiting.
 
-### 5.1 Submit a Test Run
-Send a `POST` request to the `/test-runs` endpoint of the running orchestrator:
+If the binary crashes or prints invalid JSON, the framework will capture the raw console output and mark the test step as `failed` or `errored`.
 
-```bash
-curl -X POST http://localhost:8080/test-runs \
-  -H "Content-Type: application/json" \
-  -d '{
-    "device_id": "my-custom-accel",
-    "test_suite_id": "my-smoke-suite",
-    "priority": 1,
-    "requested_by": "hardware-engineer-01"
-  }'
-```
+Below are complete, copy-pasteable templates for writing test binaries in C and Python.
 
-#### Example Response:
-```json
-{
-  "id": "run-f1a2b3c4d5",
-  "device_id": "my-custom-accel",
-  "test_suite_id": "my-smoke-suite",
-  "status": "QUEUED",
-  "priority": 1,
-  "created_at": "2026-07-12T07:30:00Z"
+### 2.1 C/C++ Test Binary Template
+This example opens the device node, performs checks, measures latency, and outputs the structured JSON using standard `printf`.
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <time.h>
+
+// Helper to get time in milliseconds
+double get_time_ms() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (ts.tv_sec * 1000.0) + (ts.tv_nsec / 1000000.0);
+}
+
+int main() {
+    double start_time = get_time_ms();
+    
+    // 1. Open the device node (provided by DVF mount)
+    int fd = open("/dev/my_accel0", O_RDWR);
+    if (fd < 0) {
+        // Return structured failure JSON
+        printf("{\n");
+        printf("  \"results\": [\n");
+        printf("    {\n");
+        printf("      \"test\": \"open_device_node\",\n");
+        printf("      \"status\": \"failed\",\n");
+        printf("      \"duration_ms\": %.2f,\n");
+        printf("      \"message\": \"Failed to open device node /dev/my_accel0\"\n");
+        printf("    }\n");
+        printf("  ]\n");
+        printf("}\n");
+        return 1; // Non-zero exit code indicates binary execution failure
+    }
+
+    // 2. Perform register write and read-back validation
+    int test_passed = 1;
+    char* err_msg = "Success";
+    
+    // [Place your custom hardware testing/register checking code here]
+    // Example: write to BAR register and verify readback
+    
+    close(fd);
+    double duration = get_time_ms() - start_time;
+
+    // 3. Print the final JSON report to stdout
+    printf("{\n");
+    printf("  \"results\": [\n");
+    printf("    {\n");
+    printf("      \"test\": \"register_read_write\",\n");
+    printf("      \"status\": \"%s\",\n", test_passed ? "passed" : "failed");
+    printf("      \"duration_ms\": %.2f,\n", duration);
+    printf("      \"message\": \"%s\",\n", err_msg);
+    printf("      \"metrics\": {\n");
+    printf("        \"register_read_latency_ns\": 42.5\n"); // Optional custom telemetry metrics
+    printf("      }\n");
+    printf("    }\n");
+    printf("  ]\n");
+    printf("}\n");
+
+    return test_passed ? 0 : 1;
 }
 ```
 
-### 5.2 Poll / View Results
-To check the status of your validation run, query the specific test run endpoint:
+### 2.2 Python Test Script Template
+If you prefer scripting, you can write tests in Python. The guest OS has Python installed.
 
-```bash
-curl http://localhost:8080/test-runs/run-f1a2b3c4d5
-```
+```python
+#!/usr/bin/env python3
+import sys
+import os
+import json
+import time
 
-#### Example Result:
-```json
-{
-  "id": "run-f1a2b3c4d5",
-  "device_id": "my-custom-accel",
-  "test_suite_id": "my-smoke-suite",
-  "status": "PASSED",
-  "duration_ms": 25400,
-  "completed_at": "2026-07-12T07:30:25Z"
-}
+def run_test():
+    start_time = time.time()
+    device_path = "/dev/my_accel0"
+    
+    # Verify device node exists
+    if not os.path.exists(device_path):
+        result = {
+            "test": "verify_device_exists",
+            "status": "failed",
+            "duration_ms": (time.time() - start_time) * 1000.0,
+            "message": f"Device node {device_path} not found."
+        }
+        print(json.dumps({"results": [result]}, indent=2))
+        sys.exit(1)
+
+    try:
+        # Open device node and perform checks
+        with open(device_path, "r+b", buffering=0) as f:
+            # [Place your custom device reads/writes/ioctls here]
+            pass
+            
+        duration_ms = (time.time() - start_time) * 1000.0
+        result = {
+            "test": "dma_ping_pong",
+            "status": "passed",
+            "duration_ms": duration_ms,
+            "message": "DMA validation complete",
+            "metrics": {
+                "throughput_mbps": 750.8
+            }
+        }
+        print(json.dumps({"results": [result]}, indent=2))
+        sys.exit(0)
+        
+    except Exception as e:
+        duration_ms = (time.time() - start_time) * 1000.0
+        result = {
+            "test": "dma_ping_pong",
+            "status": "failed",
+            "duration_ms": duration_ms,
+            "message": f"Exception encountered: {str(e)}"
+        }
+        print(json.dumps({"results": [result]}, indent=2))
+        sys.exit(1)
+
+if __name__ == "__main__":
+    run_test()
 ```
 
 ---
 
-## 6. Guidelines for Custom Drivers & Tests
+## 3. Custom Telemetry Metrics
 
-To ensure seamless integration with the validation framework:
-1.  **Clean Clean-up**: Ensure your driver module can be cleanly unloaded (`rmmod`). Stale resources or memory leaks in your driver can hang the VM tear-down phase.
-2.  **Explicit Timeouts**: Always specify realistic `timeout_seconds` for each test in `suite.json`. If a test hangs or deadlocks, DVF will automatically abort it after this limit to free the VM.
-3.  **Use `/dev/` Nodes**: Make sure your driver uses standard `udev` or kernel APIs to create the device node path configured in `device_registry.json`. DVF will verify the existence of this node before running tests.
+You can define any arbitrary keys in the `"metrics"` dictionary of your JSON outputs. These are parsed by the DVF telemetry subsystem and streamed to the Prometheus / Redis Stream telemetry bus for dashboard plotting.
+*   *Recommended Metrics*: `throughput_mbps`, `interrupt_latency_us`, `error_rate`, `dma_transfer_time_ms`.
