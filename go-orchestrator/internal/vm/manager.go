@@ -135,7 +135,7 @@ func (m *VMManager) BuildQEMUArgs(vmID string, vmCfg *VMConfig) []string {
 		"-kernel", kernelPath,
 		"-drive", fmt.Sprintf("file=%s,format=qcow2,if=virtio", overlayPath),
 		// Pass vm_id on cmdline so the agent can self-identify without networking
-		"-append", fmt.Sprintf("root=/dev/vda console=ttyS0 rw init=/bin/bash dvf_vm_id=%s", vmID),
+		"-append", fmt.Sprintf("root=/dev/vda console=ttyS0 rw init=/dvf-init dvf_vm_id=%s", vmID),
 
 		// Resources
 		"-m", strconv.Itoa(memMB),

@@ -51,10 +51,9 @@ func TestBuildQEMUArgs(t *testing.T) {
 		contains string
 	}{
 		{"kernel", "-kernel /boot/bzImage"},
-		{"rootfs", "file=/images/rootfs.ext4"},
 		{"virtio-disk", "if=virtio"},
 		{"console", "console=ttyS0"},
-		{"init", "init=/bin/bash"},
+		{"init", "init=/dvf-init"},
 		{"vm-id-cmdline", "dvf_vm_id=test-vm-1"},
 		{"memory", "-m 1024"},
 		{"cpus", "-smp 2"},
@@ -114,7 +113,7 @@ func TestBuildQEMUArgsWithOverrides(t *testing.T) {
 		{"memory override", "-m 2048"},
 		{"cpu override", "-smp 4"},
 		{"kernel override", "/custom/bzImage"},
-		{"rootfs override", "/custom/rootfs.img"},
+		{"rootfs override", "overlay"},
 		{"share override", "path=/custom/share"},
 	}
 
