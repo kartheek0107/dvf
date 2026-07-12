@@ -1,0 +1,33 @@
+[Unit]
+Description=DVF Guest Agent
+Documentation=https://github.com/kartheekbudime/driver-validation-suite
+After=network.target local-fs.target
+
+[Service]
+Type=simple
+User=root
+
+# Mount the 9p share before starting
+ExecStartPre=/bin/mkdir -p /mnt/share
+ExecStartPre=/bin/mount -t 9p -o trans=virtio,version=9p2000.L hostshare /mnt/share
+
+# Start the Python agent
+ExecStart=/usr/bin/python3 /mnt/share/python-agent/agent/__main__.py
+
+# Environment — override DVF_SERIAL_PORT if the virtio port name differs
+Environment=DVF_SERIAL_PORT=/dev/virtio-ports/dvf.agent.0
+Environment=DVF_SHARE_DIR=/mnt/share
+Environment=PYTHONUNBUFFERED=1
+
+# Restart on failure with a short delay (gives the host time to reconnect)
+Restart=on-failure
+RestartSec=3s
+RestartPreventExitStatus=0
+
+# Redirect agent stdout/stderr to the journal
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dvf-agent
+
+[Install]
+WantedBy=multi-user.target
