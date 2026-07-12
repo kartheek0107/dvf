@@ -1,0 +1,62 @@
+version: "3.9"
+
+# DVF Local Development Infrastructure
+#
+# Services:
+#   - postgres  : persistent metadata store (test runs, results, VMs)
+#   - redis     : real-time state cache (heartbeats, event bus — Tier 2)
+#
+# Usage:
+#   docker compose up -d          # start all services
+#   docker compose down           # stop (data persisted in named volumes)
+#   docker compose down -v        # stop and DELETE all data
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — Persistent Metadata Store
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: dvf-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: dvf
+      POSTGRES_PASSWORD: dvf_secret
+      POSTGRES_DB: dvf_validation
+    volumes:
+      - dvf_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dvf -d dvf_validation"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # Redis — Real-Time State (hot data, event bus — Tier 2)
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: dvf-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - dvf_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+# ---------------------------------------------------------------------------
+# Named Volumes — data survives container restarts
+# ---------------------------------------------------------------------------
+volumes:
+  dvf_pgdata:
+    driver: local
+  dvf_redis_data:
+    driver: local
