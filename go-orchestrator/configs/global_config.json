@@ -12,9 +12,9 @@
     "guest_mount": "/mnt/share",
     "default_memory_mb": 1024,
     "default_cpus": 2,
-    "vm_image_dir": "/var/lib/dvf/images",
-    "socket_dir": "/var/run/dvf/qmp",
-    "serial_socket_dir": "/var/run/dvf/serial"
+    "vm_image_dir": "/home/kartheekbudime/driver-validation-suite/go-orchestrator/tmp/images",
+    "socket_dir": "/home/kartheekbudime/driver-validation-suite/go-orchestrator/tmp/qmp",
+    "serial_socket_dir": "/home/kartheekbudime/driver-validation-suite/go-orchestrator/tmp/serial"
   },
   "fpga": {
     "vfio_group_path": "/dev/vfio",
