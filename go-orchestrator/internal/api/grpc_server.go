@@ -14,6 +14,7 @@ import (
 
 	"github.com/kartheekbudime/driver-validation-suite/go-orchestrator/internal/config"
 	"github.com/kartheekbudime/driver-validation-suite/go-orchestrator/internal/core"
+	"github.com/kartheekbudime/driver-validation-suite/go-orchestrator/internal/observability"
 	"github.com/kartheekbudime/driver-validation-suite/go-orchestrator/internal/storage"
 	pb "github.com/kartheekbudime/driver-validation-suite/go-orchestrator/proto/orchestratorpb"
 )
@@ -26,15 +27,23 @@ type GRPCServer struct {
 	registry *config.DeviceRegistry
 	logger   *zap.Logger
 	engine   *core.ExecutionEngine
+	audit    *observability.AuditLogger
 }
 
 // NewGRPCServer creates a new gRPC server with all dependencies injected.
-func NewGRPCServer(store storage.Store, registry *config.DeviceRegistry, engine *core.ExecutionEngine, logger *zap.Logger) *GRPCServer {
+func NewGRPCServer(
+	store storage.Store,
+	registry *config.DeviceRegistry,
+	engine *core.ExecutionEngine,
+	logger *zap.Logger,
+	audit *observability.AuditLogger,
+) *GRPCServer {
 	return &GRPCServer{
 		store:    store,
 		registry: registry,
 		engine:   engine,
 		logger:   logger,
+		audit:    audit,
 	}
 }
 
@@ -78,6 +87,10 @@ func (s *GRPCServer) SubmitTestRun(ctx context.Context, req *pb.SubmitTestRunReq
 	}
 
 	s.logger.Info("test run created", zap.String("id", created.ID))
+
+	if s.audit != nil {
+		s.audit.LogSubmit(ctx, created.ID, created.DeviceID, created.TestSuiteID, created.RequestedBy, created.Tags)
+	}
 
 	// Submit test run to the execution engine
 	if s.engine != nil {
@@ -155,6 +168,10 @@ func (s *GRPCServer) CancelTestRun(ctx context.Context, req *pb.CancelTestRunReq
 	}
 
 	s.logger.Info("test run cancelled", zap.String("id", req.Id))
+
+	if s.audit != nil {
+		s.audit.LogCancel(ctx, req.Id, run.RequestedBy)
+	}
 
 	return &pb.CancelTestRunResponse{
 		Success: true,

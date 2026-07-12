@@ -18,18 +18,18 @@ func NewLogger(level, format string) (*zap.Logger, error) {
 	}
 
 	var cfg zap.Config
-	switch format {
-	case "json":
-		cfg = zap.NewProductionConfig()
-	case "console":
+	if format == "console" {
 		cfg = zap.NewDevelopmentConfig()
-	default:
+		cfg.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+		cfg.EncoderConfig.EncodeTime = zapcore.TimeEncoderOfLayout("15:04:05.000")
+		cfg.EncoderConfig.CallerKey = "" // omit file caller references to keep the output clean
+	} else {
 		cfg = zap.NewProductionConfig()
+		cfg.EncoderConfig.TimeKey = "ts"
+		cfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 	}
 
 	cfg.Level = zap.NewAtomicLevelAt(zapLevel)
-	cfg.EncoderConfig.TimeKey = "ts"
-	cfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 	cfg.EncoderConfig.EncodeDuration = zapcore.MillisDurationEncoder
 
 	logger, err := cfg.Build(
