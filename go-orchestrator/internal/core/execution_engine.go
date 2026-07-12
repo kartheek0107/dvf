@@ -15,8 +15,14 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/kartheekbudime/driver-validation-suite/go-orchestrator/internal/config"
+	"github.com/kartheekbudime/driver-validation-suite/go-orchestrator/internal/observability"
+	"github.com/kartheekbudime/driver-validation-suite/go-orchestrator/internal/telemetry"
 )
 
 // VMManagerInterface abstracts the VM Manager so the engine can be tested
@@ -78,6 +84,8 @@ type ExecutionEngine struct {
 	agentCoord AgentCoordinatorInterface
 	logger     *zap.Logger
 	cfg        *config.GlobalConfig
+	eventBus   *telemetry.EventBus
+	audit      *observability.AuditLogger
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -93,6 +101,8 @@ func NewExecutionEngine(
 	agentCoord AgentCoordinatorInterface,
 	cfg *config.GlobalConfig,
 	logger *zap.Logger,
+	eventBus *telemetry.EventBus,
+	audit *observability.AuditLogger,
 ) *ExecutionEngine {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &ExecutionEngine{
@@ -103,6 +113,8 @@ func NewExecutionEngine(
 		agentCoord: agentCoord,
 		cfg:        cfg,
 		logger:     logger,
+		eventBus:   eventBus,
+		audit:      audit,
 		ctx:        ctx,
 		cancel:     cancel,
 	}
@@ -133,6 +145,19 @@ func (e *ExecutionEngine) SubmitTestRun(run *TestRun) {
 		zap.String("device", run.DeviceID),
 		zap.String("suite", run.TestSuiteID),
 	)
+	if e.eventBus != nil {
+		_ = e.eventBus.Publish(context.Background(), telemetry.Event{
+			Type:     telemetry.EventTestRunSubmitted,
+			EntityID: run.ID,
+			DeviceID: run.DeviceID,
+			Status:   string(TestRunStatusPending),
+			Payload: map[string]interface{}{
+				"priority":     run.Priority,
+				"requested_by": run.RequestedBy,
+				"tags":         run.Tags,
+			},
+		})
+	}
 }
 
 // worker is the background goroutine that continuously pulls test runs
@@ -177,9 +202,19 @@ func (e *ExecutionEngine) worker() {
 //  7. Tear down VM
 //  8. Update final status (PASSED/FAILED/ERRORED)
 func (e *ExecutionEngine) executeTestRun(ctx context.Context, run *TestRun) error {
-	runCtx, runCancel := context.WithTimeout(ctx,
+	tr := otel.Tracer("dvf-orchestrator")
+	runCtx, span := tr.Start(ctx, "executeTestRun", trace.WithAttributes(
+		attribute.String("test_run_id", run.ID),
+		attribute.String("device_id", run.DeviceID),
+		attribute.String("test_suite_id", run.TestSuiteID),
+	))
+	defer span.End()
+
+	runCtx, runCancel := context.WithTimeout(runCtx,
 		time.Duration(e.cfg.VMDefaults.TestTimeoutSeconds)*time.Second)
 	defer runCancel()
+
+	startTime := time.Now()
 
 	e.logger.Info("executing test run",
 		zap.String("id", run.ID),
@@ -189,22 +224,31 @@ func (e *ExecutionEngine) executeTestRun(ctx context.Context, run *TestRun) erro
 
 	// Step 1: Update status → RUNNING
 	if err := e.store.UpdateTestRunStatus(runCtx, run.ID, TestRunStatusRunning, ""); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("updating status to RUNNING: %w", err)
+	}
+
+	if e.eventBus != nil {
+		_ = e.eventBus.Publish(runCtx, telemetry.Event{
+			Type:     telemetry.EventTestRunStarted,
+			EntityID: run.ID,
+			DeviceID: run.DeviceID,
+			Status:   string(TestRunStatusRunning),
+		})
 	}
 
 	// Step 2: Look up device
 	device, err := e.registry.FindDevice(run.DeviceID)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		e.store.UpdateTestRunStatus(runCtx, run.ID, TestRunStatusErrored,
 			fmt.Sprintf("device not found: %v", err))
 		return fmt.Errorf("device lookup: %w", err)
 	}
 
 	// Step 2b: Gate on target_mode.
-	// Devices like FPGA have target_modes:["fpga","hybrid"] and require a
-	// real physical PCIe device passed via VFIO. Trying to boot them via
-	// plain QEMU (no host= argument) causes an immediate QEMU exit.
-	// Skip such runs gracefully instead of creating a VM that will fail.
 	if !deviceSupportsQEMU(device.TargetModes) {
 		msg := fmt.Sprintf(
 			"skipped: device %q target_modes %v does not include 'qemu'; "+
@@ -214,28 +258,83 @@ func (e *ExecutionEngine) executeTestRun(ctx context.Context, run *TestRun) erro
 		e.logger.Warn("skipping non-QEMU device", zap.String("device", device.ID),
 			zap.Strings("target_modes", device.TargetModes))
 		e.store.UpdateTestRunStatus(runCtx, run.ID, TestRunStatusCancelled, msg)
-		return nil // not an error — expected skip
+
+		if e.eventBus != nil {
+			_ = e.eventBus.Publish(runCtx, telemetry.Event{
+				Type:     telemetry.EventTestRunCancelled,
+				EntityID: run.ID,
+				DeviceID: run.DeviceID,
+				Status:   string(TestRunStatusCancelled),
+				Payload:  map[string]interface{}{"reason": msg},
+			})
+		}
+		if e.audit != nil {
+			e.audit.LogCancel(runCtx, run.ID, run.RequestedBy)
+		}
+		span.SetStatus(codes.Ok, "skipped non-QEMU device")
+		return nil
 	}
 
 	// Step 3: Create + start VM
-	// We pass the device entry as a generic interface since VMManagerInterface
-	// uses interface{} for flexibility.
-	vmInstance, err := e.vmManager.CreateVM(runCtx, device)
+	var vmInstance *VMInstance
+	err = func() error {
+		_, createSpan := tr.Start(runCtx, "CreateVM")
+		defer createSpan.End()
+		var createErr error
+		vmInstance, createErr = e.vmManager.CreateVM(runCtx, device)
+		if createErr != nil {
+			createSpan.RecordError(createErr)
+			createSpan.SetStatus(codes.Error, createErr.Error())
+			return createErr
+		}
+		return nil
+	}()
+
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		e.store.UpdateTestRunStatus(runCtx, run.ID, TestRunStatusErrored,
 			fmt.Sprintf("VM creation failed: %v", err))
 		return fmt.Errorf("creating VM: %w", err)
 	}
 
-
 	// Update the test run with the VM ID
 	run.VMID = vmInstance.ID
+
+	if e.eventBus != nil {
+		_ = e.eventBus.Publish(runCtx, telemetry.Event{
+			Type:     telemetry.EventVMCreated,
+			EntityID: vmInstance.ID,
+			DeviceID: run.DeviceID,
+			Status:   string(vmInstance.Status),
+			Payload: map[string]interface{}{
+				"test_run_id": run.ID,
+			},
+		})
+	}
+	if e.audit != nil {
+		e.audit.LogVMEvent(runCtx, "vm.created", vmInstance.ID, run.DeviceID, run.ID)
+	}
 
 	if e.agentCoord != nil {
 		e.agentCoord.RegisterVM(vmInstance.ID)
 	}
 
-	if err := e.vmManager.StartVM(runCtx, vmInstance.ID); err != nil {
+	err = func() error {
+		_, startSpan := tr.Start(runCtx, "StartVM")
+		defer startSpan.End()
+		startErr := e.vmManager.StartVM(runCtx, vmInstance.ID)
+		if startErr != nil {
+			startSpan.RecordError(startErr)
+			startSpan.SetStatus(codes.Error, startErr.Error())
+			return startErr
+		}
+		return nil
+	}()
+
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		if e.agentCoord != nil {
 			e.agentCoord.UnregisterVM(vmInstance.ID)
 		}
@@ -247,12 +346,29 @@ func (e *ExecutionEngine) executeTestRun(ctx context.Context, run *TestRun) erro
 
 	// Ensure we clean up the VM no matter what
 	defer func() {
+		_, stopSpan := tr.Start(context.Background(), "StopAndDestroyVM")
+		defer stopSpan.End()
+
 		e.logger.Info("tearing down VM", zap.String("vm_id", vmInstance.ID))
 		if e.agentCoord != nil {
 			e.agentCoord.UnregisterVM(vmInstance.ID)
 		}
 		e.vmManager.StopVM(context.Background(), vmInstance.ID)
 		e.vmManager.DestroyVM(context.Background(), vmInstance.ID)
+
+		if e.eventBus != nil {
+			_ = e.eventBus.Publish(context.Background(), telemetry.Event{
+				Type:     telemetry.EventVMDestroyed,
+				EntityID: vmInstance.ID,
+				DeviceID: run.DeviceID,
+				Payload: map[string]interface{}{
+					"test_run_id": run.ID,
+				},
+			})
+		}
+		if e.audit != nil {
+			e.audit.LogVMEvent(context.Background(), "vm.destroyed", vmInstance.ID, run.DeviceID, run.ID)
+		}
 	}()
 
 	// Step 4: Wait for guest agent
@@ -262,12 +378,37 @@ func (e *ExecutionEngine) executeTestRun(ctx context.Context, run *TestRun) erro
 		defer agentCancel()
 
 		e.logger.Info("waiting for agent", zap.String("vm_id", vmInstance.ID))
-		if err := e.agentCoord.WaitForAgent(agentCtx, vmInstance.ID); err != nil {
+		err = func() error {
+			_, waitSpan := tr.Start(agentCtx, "WaitForAgent")
+			defer waitSpan.End()
+			waitErr := e.agentCoord.WaitForAgent(agentCtx, vmInstance.ID)
+			if waitErr != nil {
+				waitSpan.RecordError(waitErr)
+				waitSpan.SetStatus(codes.Error, waitErr.Error())
+				return waitErr
+			}
+			return nil
+		}()
+
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 			e.store.UpdateTestRunStatus(runCtx, run.ID, TestRunStatusErrored,
 				fmt.Sprintf("agent registration timeout: %v", err))
 			return fmt.Errorf("waiting for agent: %w", err)
 		}
 		e.logger.Info("agent ready", zap.String("vm_id", vmInstance.ID))
+
+		if e.eventBus != nil {
+			_ = e.eventBus.Publish(runCtx, telemetry.Event{
+				Type:     telemetry.EventVMReady,
+				EntityID: vmInstance.ID,
+				DeviceID: run.DeviceID,
+				Payload: map[string]interface{}{
+					"test_run_id": run.ID,
+				},
+			})
+		}
 
 		// Step 5: Load driver
 		loadCmd := &AgentCommand{
@@ -279,7 +420,25 @@ func (e *ExecutionEngine) executeTestRun(ctx context.Context, run *TestRun) erro
 			},
 		}
 
-		result, err := e.agentCoord.SendCommand(runCtx, vmInstance.ID, loadCmd)
+		var result *AgentResult
+		err = func() error {
+			_, loadSpan := tr.Start(runCtx, "LoadDriver")
+			defer loadSpan.End()
+			var loadErr error
+			result, loadErr = e.agentCoord.SendCommand(runCtx, vmInstance.ID, loadCmd)
+			if loadErr != nil {
+				loadSpan.RecordError(loadErr)
+				loadSpan.SetStatus(codes.Error, loadErr.Error())
+				return loadErr
+			}
+			if result.Status != "passed" {
+				loadSpan.RecordError(fmt.Errorf("driver load status: %s", result.Status))
+				loadSpan.SetStatus(codes.Error, fmt.Sprintf("driver load status: %s", result.Status))
+				return fmt.Errorf("driver load status: %s", result.Status)
+			}
+			return nil
+		}()
+
 		if err != nil || result.Status != "passed" {
 			errMsg := "driver load failed"
 			if err != nil {
@@ -292,6 +451,17 @@ func (e *ExecutionEngine) executeTestRun(ctx context.Context, run *TestRun) erro
 		}
 		e.logger.Info("driver loaded", zap.String("module", device.DriverModule))
 
+		if e.eventBus != nil {
+			_ = e.eventBus.Publish(runCtx, telemetry.Event{
+				Type:     telemetry.EventDriverLoaded,
+				EntityID: run.ID,
+				DeviceID: run.DeviceID,
+				Payload: map[string]interface{}{
+					"module_name": device.DriverModule,
+				},
+			})
+		}
+
 		// Vishwa suites require a verify_device step before the actual test.
 		if isVishwaSuite(run.TestSuiteID) {
 			verifyCmd := &AgentCommand{
@@ -301,11 +471,29 @@ func (e *ExecutionEngine) executeTestRun(ctx context.Context, run *TestRun) erro
 					"device_node": device.DeviceNode,
 				},
 			}
-			verifyResult, verifyErr := e.agentCoord.SendCommand(runCtx, vmInstance.ID, verifyCmd)
-			if verifyErr != nil || verifyResult.Status != "passed" {
-				errMsg := "device verification failed"
+			var verifyResult *AgentResult
+			err = func() error {
+				_, verifySpan := tr.Start(runCtx, "VerifyDevice")
+				defer verifySpan.End()
+				var verifyErr error
+				verifyResult, verifyErr = e.agentCoord.SendCommand(runCtx, vmInstance.ID, verifyCmd)
 				if verifyErr != nil {
-					errMsg = verifyErr.Error()
+					verifySpan.RecordError(verifyErr)
+					verifySpan.SetStatus(codes.Error, verifyErr.Error())
+					return verifyErr
+				}
+				if verifyResult.Status != "passed" {
+					verifySpan.RecordError(fmt.Errorf("verify status: %s", verifyResult.Status))
+					verifySpan.SetStatus(codes.Error, fmt.Sprintf("verify status: %s", verifyResult.Status))
+					return fmt.Errorf("verify status: %s", verifyResult.Status)
+				}
+				return nil
+			}()
+
+			if err != nil || verifyResult.Status != "passed" {
+				errMsg := "device verification failed"
+				if err != nil {
+					errMsg = err.Error()
 				} else if verifyResult != nil {
 					errMsg = verifyResult.Output
 				}
@@ -316,14 +504,9 @@ func (e *ExecutionEngine) executeTestRun(ctx context.Context, run *TestRun) erro
 		}
 
 		// Step 6: Execute tests
-		// Build the start_test command — for Vishwa suites we embed the env map
-		// and binary_dir so the agent can run the test with the correct environment
-		// and working directory.
 		var testCmd *AgentCommand
 		if isVishwaSuite(run.TestSuiteID) {
 			cmds := vishwaCommandSequence(run, device)
-			// vishwaCommandSequence returns [load_driver, verify_device, start_test];
-			// we already sent load_driver and verify_device above, so use index 2.
 			testCmd = cmds[2]
 		} else {
 			testCmd = &AgentCommand{
@@ -336,18 +519,39 @@ func (e *ExecutionEngine) executeTestRun(ctx context.Context, run *TestRun) erro
 			}
 		}
 
-		testResult, err := e.agentCoord.SendCommand(runCtx, vmInstance.ID, testCmd)
+		var testResult *AgentResult
+		err = func() error {
+			_, runTestsSpan := tr.Start(runCtx, "RunTests")
+			defer runTestsSpan.End()
+			var runTestsErr error
+			testResult, runTestsErr = e.agentCoord.SendCommand(runCtx, vmInstance.ID, testCmd)
+			if runTestsErr != nil {
+				runTestsSpan.RecordError(runTestsErr)
+				runTestsSpan.SetStatus(codes.Error, runTestsErr.Error())
+				return runTestsErr
+			}
+			return nil
+		}()
+
 		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 			e.store.UpdateTestRunStatus(runCtx, run.ID, TestRunStatusErrored,
 				fmt.Sprintf("test execution failed: %v", err))
 			return fmt.Errorf("executing tests: %w", err)
 		}
 
 		// Step 7: Parse and store results
-		if err := e.processResults(runCtx, run, testResult); err != nil {
-			e.logger.Warn("failed to process results",
-				zap.String("run_id", run.ID), zap.Error(err))
-		}
+		func() {
+			_, parseSpan := tr.Start(runCtx, "ProcessResults")
+			defer parseSpan.End()
+			if err := e.processResults(runCtx, run, testResult); err != nil {
+				parseSpan.RecordError(err)
+				parseSpan.SetStatus(codes.Error, err.Error())
+				e.logger.Warn("failed to process results",
+					zap.String("run_id", run.ID), zap.Error(err))
+			}
+		}()
 	} else {
 		// No agent coordinator — mark as passed for now (development mode)
 		e.logger.Warn("no agent coordinator configured, skipping test execution",
@@ -370,6 +574,30 @@ func (e *ExecutionEngine) executeTestRun(ctx context.Context, run *TestRun) erro
 		zap.String("status", string(finalStatus)),
 	)
 
+	durationMs := time.Since(startTime).Milliseconds()
+
+	if e.eventBus != nil {
+		_ = e.eventBus.Publish(runCtx, telemetry.Event{
+			Type:     telemetry.EventTestRunCompleted,
+			EntityID: run.ID,
+			DeviceID: run.DeviceID,
+			Status:   string(finalStatus),
+			Payload: map[string]interface{}{
+				"duration_ms": durationMs,
+			},
+		})
+	}
+
+	if e.audit != nil {
+		e.audit.LogComplete(runCtx, run.ID, string(finalStatus), durationMs)
+	}
+
+	if finalStatus != TestRunStatusPassed {
+		span.SetStatus(codes.Error, "test run failed")
+	} else {
+		span.SetStatus(codes.Ok, "test run passed")
+	}
+
 	return nil
 }
 
@@ -380,8 +608,7 @@ func (e *ExecutionEngine) processResults(ctx context.Context, run *TestRun, agen
 		return nil
 	}
 
-	// Try to parse as a JSON array of test results
-	var rawResults []struct {
+	type rawResultItem struct {
 		Test       string             `json:"test"`
 		Status     string             `json:"status"`
 		DurationMs float64            `json:"duration_ms"`
@@ -389,18 +616,29 @@ func (e *ExecutionEngine) processResults(ctx context.Context, run *TestRun, agen
 		Metrics    map[string]float64 `json:"metrics"`
 	}
 
-	if err := json.Unmarshal([]byte(agentResult.Output), &rawResults); err != nil {
-		// If not an array, store as a single result
-		result := &TestResult{
-			TestRunID:   run.ID,
-			TestName:    run.TestSuiteID,
-			Status:      mapAgentStatus(agentResult.Status),
-			DurationMs:  agentResult.DurationMs,
-			Message:     agentResult.Output,
-			Logs:        agentResult.Logs,
-			CompletedAt: time.Now().UTC(),
+	var rawResults []rawResultItem
+
+	// Try 1: Parse as a JSON object with a "results" field (Vishwa output format)
+	var objResult struct {
+		Results []rawResultItem `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(agentResult.Output), &objResult); err == nil && len(objResult.Results) > 0 {
+		rawResults = objResult.Results
+	} else {
+		// Try 2: Parse as a JSON array of test results
+		if err := json.Unmarshal([]byte(agentResult.Output), &rawResults); err != nil {
+			// If neither, store as a single result
+			result := &TestResult{
+				TestRunID:   run.ID,
+				TestName:    run.TestSuiteID,
+				Status:      mapAgentStatus(agentResult.Status),
+				DurationMs:  agentResult.DurationMs,
+				Message:     agentResult.Output,
+				Logs:        agentResult.Logs,
+				CompletedAt: time.Now().UTC(),
+			}
+			return e.store.SaveTestResult(ctx, result)
 		}
-		return e.store.SaveTestResult(ctx, result)
 	}
 
 	// Save each individual test result
