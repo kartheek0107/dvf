@@ -1,6 +1,8 @@
 // Package config provides configuration loading and validation for the DVF orchestrator.
 package config
 
+import "fmt"
+
 // GlobalConfig is the top-level configuration structure loaded from global_config.json.
 type GlobalConfig struct {
 	Server     ServerConfig     `json:"server"`
@@ -55,6 +57,23 @@ type PostgresConfig struct {
 	Database       string `json:"database"`
 	MaxConnections int    `json:"max_connections"`
 	SSLMode        string `json:"ssl_mode"`
+}
+
+// DSN builds a postgres:// connection string from the config fields.
+// Used by storage.NewPostgresStore.
+func (c *PostgresConfig) DSN() string {
+	sslMode := c.SSLMode
+	if sslMode == "" {
+		sslMode = "disable"
+	}
+	port := c.Port
+	if port == 0 {
+		port = 5432
+	}
+	return fmt.Sprintf(
+		"postgres://%s:%s@%s:%d/%s?sslmode=%s",
+		c.User, c.Password, c.Host, port, c.Database, sslMode,
+	)
 }
 
 // RedisConfig defines the Redis connection parameters.
