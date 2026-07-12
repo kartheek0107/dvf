@@ -67,7 +67,7 @@ Create a folder under the host's `test-suites/` directory (e.g., `test-suites/my
    ```
 2. Trigger the validation run by sending an HTTP POST request:
    ```bash
-   curl -X POST http://localhost:8080/test-runs \
+   curl -X POST http://localhost:8080/api/v1/test-runs \
      -H "Content-Type: application/json" \
      -d '{
        "device_id": "my-custom-accel",
@@ -219,3 +219,28 @@ if __name__ == "__main__":
 
 You can define any arbitrary keys in the `"metrics"` dictionary of your JSON outputs. These are parsed by the DVF telemetry subsystem and streamed to the Prometheus / Redis Stream telemetry bus for dashboard plotting.
 *   *Recommended Metrics*: `throughput_mbps`, `interrupt_latency_us`, `error_rate`, `dma_transfer_time_ms`.
+
+---
+
+## 4. Querying and Managing Test Runs via the API
+
+Once you have triggered a test run, you can monitor, query, and fetch its results using the following HTTP endpoints:
+
+### 4.1 Check Test Run Status
+To see whether your run is queued, running, passed, or failed:
+```bash
+curl http://localhost:8080/api/v1/test-runs/YOUR_TEST_RUN_ID
+```
+
+### 4.2 Fetch Detailed Test Assertion Results
+To fetch the individual test cases, durations, logs, and custom metrics returned by your test binaries:
+```bash
+curl http://localhost:8080/api/v1/test-runs/YOUR_TEST_RUN_ID/results
+```
+
+### 4.3 Cancel an In-Progress Test Run
+If you need to stop a test run:
+```bash
+curl -X POST http://localhost:8080/api/v1/test-runs/YOUR_TEST_RUN_ID/cancel -d '{}'
+```
+
