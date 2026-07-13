@@ -892,21 +892,46 @@ func (e *ExecutionEngine) loadTestSuite(suiteID string, device *config.DeviceEnt
 		}, nil
 	}
 
-	paths := []string{
-		filepath.Join("/home/kartheekbudime/driver-validation-suite/test-suites", suiteID, "suite.json"),
-		filepath.Join("../test-suites", suiteID, "suite.json"),
-		filepath.Join("test-suites", suiteID, "suite.json"),
-	}
-
 	var data []byte
 	var err error
-	for _, p := range paths {
-		data, err = os.ReadFile(p)
-		if err == nil {
-			break
+
+	// Try to locate the test suite file by climbing up the directory hierarchy
+	var foundPath string
+	if cwd, getwdErr := os.Getwd(); getwdErr == nil {
+		dir := cwd
+		for {
+			p := filepath.Join(dir, "test-suites", suiteID, "suite.json")
+			if _, statErr := os.Stat(p); statErr == nil {
+				foundPath = p
+				break
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+			dir = parent
 		}
 	}
-	if err != nil {
+
+	if foundPath != "" {
+		data, err = os.ReadFile(foundPath)
+	} else {
+		// Fallback to searching static/relative paths
+		paths := []string{
+			filepath.Join("/home/kartheekbudime/driver-validation-suite/test-suites", suiteID, "suite.json"),
+			filepath.Join("../../../test-suites", suiteID, "suite.json"),
+			filepath.Join("../test-suites", suiteID, "suite.json"),
+			filepath.Join("test-suites", suiteID, "suite.json"),
+		}
+		for _, p := range paths {
+			data, err = os.ReadFile(p)
+			if err == nil {
+				break
+			}
+		}
+	}
+
+	if err != nil || len(data) == 0 {
 		return nil, fmt.Errorf("loading test suite %s: %w", suiteID, err)
 	}
 
