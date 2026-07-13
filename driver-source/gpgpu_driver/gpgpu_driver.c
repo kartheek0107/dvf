@@ -1,5 +1,6 @@
 #include <linux/module.h>
 #include <linux/pci.h>
+#include <linux/version.h>
 
 #define PCI_VENDOR_ID_MY_GPGPU 0x1222
 #define PCI_DEVICE_ID_MY_GPGPU 0x2221
@@ -105,7 +106,11 @@ static int gpgpu_probe(struct pci_dev *pdev, const struct pci_device_id *id){
     }
 
     major_number = register_chrdev(0, DEVICE_NAME, &fops);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
     gpgpu_class = class_create(DEVICE_NAME);
+#else
+    gpgpu_class = class_create(THIS_MODULE, DEVICE_NAME);
+#endif
     gpgpu_device = device_create(gpgpu_class, NULL, MKDEV(major_number, 0), NULL, DEVICE_NAME);
 
     printk(KERN_INFO "gpgpu: Device initialized successfully\n");
