@@ -17,7 +17,7 @@ variables:
 # ---------------------------------------------------------------------------
 build-orchestrator:
   stage: build
-  image: golang:1.21-alpine
+  image: golang:1.26-alpine
   script:
     - cd go-orchestrator
     - go build -v -o orchestrator ./cmd/orchestrator
