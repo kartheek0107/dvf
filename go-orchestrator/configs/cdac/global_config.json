@@ -1,0 +1,63 @@
+{
+  "server": {
+    "grpc_port": 50051,
+    "rest_port": 8080,
+    "host": "0.0.0.0"
+  },
+  "qemu": {
+    "//comment": "Change these paths to match the CDAC runner host machine configuration",
+    "binary_path": "/usr/bin/qemu-system-x86_64",
+    "kernel_path": "/opt/dvf/kernel/bzImage",
+    "rootfs_path": "/opt/dvf/images/rootfs.ext4",
+    "share_dir": "/opt/dvf/share",
+    "guest_mount": "/mnt/share",
+    "default_memory_mb": 1024,
+    "default_cpus": 2,
+    "vm_image_dir": "/opt/dvf/tmp/images",
+    "socket_dir": "/opt/dvf/tmp/qmp",
+    "serial_socket_dir": "/opt/dvf/tmp/serial"
+  },
+  "fpga": {
+    "vfio_group_path": "/dev/vfio",
+    "iommu_enabled": false,
+    "pci_addresses": []
+  },
+  "storage": {
+    "postgres": {
+      "host": "localhost",
+      "port": 5432,
+      "user": "dvf",
+      "password": "dvf_secret",
+      "database": "dvf_validation",
+      "max_connections": 20,
+      "ssl_mode": "disable"
+    },
+    "redis": {
+      "host": "localhost",
+      "port": 6379,
+      "password": "",
+      "db": 0,
+      "pool_size": 10
+    },
+    "object_store": {
+      "endpoint": "localhost:9000",
+      "access_key": "minioadmin",
+      "secret_key": "minioadmin",
+      "bucket": "dvf-artifacts",
+      "use_ssl": false
+    }
+  },
+  "telemetry": {
+    "metrics_port": 9090,
+    "trace_endpoint": "localhost:4317",
+    "log_level": "info",
+    "log_format": "console"
+  },
+  "vm_defaults": {
+    "boot_timeout_seconds": 120,
+    "heartbeat_interval_seconds": 5,
+    "heartbeat_timeout_seconds": 30,
+    "test_timeout_seconds": 600,
+    "max_concurrent_vms": 10
+  }
+}

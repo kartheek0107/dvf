@@ -209,6 +209,7 @@ def main():
     parser.add_argument("--compare", default=os.getenv("CI_COMMIT_BEFORE_SHA"), help="Git ref to compare against")
     parser.add_argument("--api", default=os.getenv("DVF_API_URL", "http://localhost:8080"), help="Orchestrator REST API URL")
     parser.add_argument("--dry-run", action="store_true", help="Print schedule without running")
+    parser.add_argument("--only", help="Comma-separated list of device/suite pairs to run, e.g. fpga:error/boundaries,gpgpu:vishwa/regression/vecaddx")
     args = parser.parse_args()
 
     print("=== DVF Impact Analyzer ===")
@@ -218,20 +219,28 @@ def main():
     sidecars = find_all_sidecars()
     
     # 2. Get changed files
-    compare_ref = args.compare or "master"
-    print(f"Comparing against ref: {compare_ref}")
-    changed_files = get_changed_files(compare_ref)
-    print(f"Found {len(changed_files)} changed files.")
-
-    # If no files changed (e.g. manual CI trigger), default to all tests
-    if not changed_files:
-        print("No files changed. Scheduling all tests.")
+    if args.only:
         affected = set()
-        for dev in registry.get("devices", []):
-            for suite in dev.get("test_suites", []):
-                affected.add((dev["id"], suite))
+        for pair in args.only.split(","):
+            if ":" in pair:
+                dev, suite = pair.split(":", 1)
+                affected.add((dev.strip(), suite.strip()))
+        print(f"Overridden execution to run only: {affected}")
     else:
-        affected = get_affected_tests(changed_files, registry, sidecars)
+        compare_ref = args.compare or "master"
+        print(f"Comparing against ref: {compare_ref}")
+        changed_files = get_changed_files(compare_ref)
+        print(f"Found {len(changed_files)} changed files.")
+
+        # If no files changed (e.g. manual CI trigger), default to all tests
+        if not changed_files:
+            print("No files changed. Scheduling all tests.")
+            affected = set()
+            for dev in registry.get("devices", []):
+                for suite in dev.get("test_suites", []):
+                    affected.add((dev["id"], suite))
+        else:
+            affected = get_affected_tests(changed_files, registry, sidecars)
 
     if not affected:
         print("No validation tests affected. Exiting.")
@@ -286,7 +295,9 @@ def main():
                 completed = True
         
         print(status.replace("TEST_RUN_STATUS_", ""))
-        if status != "TEST_RUN_STATUS_PASSED":
+        if status == "TEST_RUN_STATUS_CANCELLED":
+            skipped_tests.add((dev, test))
+        elif status != "TEST_RUN_STATUS_PASSED":
             if err_msg:
                 print(f"    Error: {err_msg}")
             failed_tests.add((dev, test))

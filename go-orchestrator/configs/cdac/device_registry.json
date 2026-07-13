@@ -1,0 +1,57 @@
+{
+  "devices": [
+    {
+      "id": "gpgpu",
+      "name": "CDAC GPGPU Accelerator (PCIe EP)",
+      "vendor_id": "0x1222",
+      "device_id": "0x2221",
+      "pci_class": "0x0b40",
+      "qemu_device_name": "gp_gpu",
+      "driver_module": "gpgpu_pcie_ep_driver",
+      "driver_path": "/mnt/share/gpgpu_pcie_ep_driver.ko",
+      "device_node": "/dev/gpgpu",
+      "description": "CDAC custom PCIe GPGPU — simulated SM + DMA + MMU, vendorID=0x1222 deviceID=0x2221",
+      "target_modes": ["qemu"],
+      "capabilities": ["mmio", "dma", "mmu", "msix"],
+      "vishwa_env": {
+        "LD_LIBRARY_PATH": "/mnt/share/vishwa_tests/lib",
+        "OCL_ICD_VENDORS":  "/mnt/share/vishwa_tests/lib/OpenCL/vendors",
+        "POCL_DEVICES":     "basic",
+        "POCL_CACHE_DIR":   "/tmp/pocl_cache",
+        "POCL_VISHWA_XLEN": "32",
+        "PATH":             "/mnt/share/vishwa_tests/bin:/bin:/usr/bin"
+      },
+      "test_suites": [
+        "vishwa/regression/vecaddx",
+        "vishwa/opencl/vecadd",
+        "vishwa/opencl/vecadd2",
+        "vishwa/opencl/ai_predict",
+        "vishwa/opencl/blur",
+        "vishwa/opencl/gray",
+        "vishwa/opencl/sgemm"
+      ]
+    },
+    {
+      "id": "fpga",
+      "name": "Custom FPGA Accelerator",
+      "vendor_id": "0x10EE",
+      "device_id": "0x9038",
+      "pci_class": "0x1200",
+      "qemu_device_name": "vfio-pci",
+      "driver_module": "fpga_driver",
+      "driver_path": "driver-source/fpga_driver/fpga_driver.ko",
+      "description": "Physical FPGA PCIe accelerator — update vendor/device IDs to match your board",
+      "target_modes": ["fpga", "hybrid"],
+      "capabilities": ["mmio", "register_rw", "dma"],
+      "test_suites": [
+        "smoke/register_rw",
+        "smoke/offset_sweep",
+        "regression/patterns",
+        "regression/persistence",
+        "stress/concurrent_rw",
+        "stress/throughput",
+        "error/boundaries"
+      ]
+    }
+  ]
+}

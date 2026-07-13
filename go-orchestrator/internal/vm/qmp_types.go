@@ -5,12 +5,12 @@
 // Every message is a single JSON object terminated by a newline.
 //
 // Protocol flow:
-//   1. Client connects to the Unix socket
-//   2. QEMU sends a greeting:    {"QMP": {"version": {...}, "capabilities": [...]}}
-//   3. Client sends:             {"execute": "qmp_capabilities"}
-//   4. QEMU responds:            {"return": {}}
-//   5. Client is now in command mode — can send any QMP command
-//   6. QEMU may send async events at any time: {"event": "...", "data": {...}}
+//  1. Client connects to the Unix socket
+//  2. QEMU sends a greeting:    {"QMP": {"version": {...}, "capabilities": [...]}}
+//  3. Client sends:             {"execute": "qmp_capabilities"}
+//  4. QEMU responds:            {"return": {}}
+//  5. Client is now in command mode — can send any QMP command
+//  6. QEMU may send async events at any time: {"event": "...", "data": {...}}
 package vm
 
 import (
@@ -62,7 +62,7 @@ type QMPResponse struct {
 }
 
 // QMPError is the error object inside a QMP error response.
-// Example: {"class": "GenericError", "desc": "Device 'foo' not found"}
+// Example: {"class": "GenericError", "desc": "Device '001' not found"}
 type QMPError struct {
 	Class string `json:"class"`
 	Desc  string `json:"desc"`
@@ -101,12 +101,12 @@ func (t QMPTimestamp) Time() time.Time {
 //   - Event:     has "event" key   → async notification
 type qmpMessage struct {
 	// Exactly one of these will be populated based on which JSON key is present.
-	QMP    json.RawMessage `json:"QMP,omitempty"`    // greeting
-	Return json.RawMessage `json:"return,omitempty"` // success response
-	Error  *QMPError       `json:"error,omitempty"`  // error response
-	Event  string          `json:"event,omitempty"`   // async event name
-	Data   json.RawMessage `json:"data,omitempty"`    // event data (only with Event)
-	Timestamp *QMPTimestamp `json:"timestamp,omitempty"` // event timestamp
+	QMP       json.RawMessage `json:"QMP,omitempty"`       // greeting
+	Return    json.RawMessage `json:"return,omitempty"`    // success response
+	Error     *QMPError       `json:"error,omitempty"`     // error response
+	Event     string          `json:"event,omitempty"`     // async event name
+	Data      json.RawMessage `json:"data,omitempty"`      // event data (only with Event)
+	Timestamp *QMPTimestamp   `json:"timestamp,omitempty"` // event timestamp
 }
 
 // isResponse returns true if this message is a command response (success or error).
@@ -132,10 +132,10 @@ type QueryStatusResult struct {
 
 // QueryCPUsResult is the parsed response from "query-cpus-fast".
 type QueryCPUsResult struct {
-	CPUIndex  int    `json:"cpu-index"`
-	QOMPath   string `json:"qom-path"`
-	ThreadID  int    `json:"thread-id"`
-	Target    string `json:"target"` // e.g., "x86_64"
+	CPUIndex int    `json:"cpu-index"`
+	QOMPath  string `json:"qom-path"`
+	ThreadID int    `json:"thread-id"`
+	Target   string `json:"target"` // e.g., "x86_64"
 }
 
 // QueryBlockResult is one entry from "query-block".
@@ -143,10 +143,10 @@ type QueryBlockResult struct {
 	Device   string `json:"device"`
 	Type     string `json:"type"`
 	Inserted *struct {
-		File            string `json:"file"`
-		BackingFile     string `json:"backing_file,omitempty"`
-		DriveType       string `json:"drv"`
-		ReadOnly        bool   `json:"ro"`
-		EncryptionKeyMissing bool `json:"encrypted"`
+		File                 string `json:"file"`
+		BackingFile          string `json:"backing_file,omitempty"`
+		DriveType            string `json:"drv"`
+		ReadOnly             bool   `json:"ro"`
+		EncryptionKeyMissing bool   `json:"encrypted"`
 	} `json:"inserted,omitempty"`
 }

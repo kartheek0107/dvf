@@ -119,3 +119,14 @@ go test ./...
 *   `GET /test-runs/{id}` - View the status and results of a run
 *   `GET /cluster/nodes` - List active orchestrator worker nodes
 *   `POST /cluster/heartbeat` - Report node health
+
+---
+
+## 5. CI/CD Automation Pipeline
+
+DVF features automated continuous integration pipelines via GitLab CI (`.gitlab-ci.yml`). On every push to the repository:
+1. **Go control plane & test binaries are built** and passed as artifacts.
+2. **Drivers and guest-agent assets are deployed** to the shared host mount.
+3. **The orchestrator service starts dynamically** inside the runner.
+4. **`ci_impact_analyzer.py` calculates the impacted tests** using Kahn's topological sort and executes them to completion.
+5. **The service cleanly shuts down** and cleanup is performed, preventing ports/VM resources from leaking.

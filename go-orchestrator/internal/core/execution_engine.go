@@ -255,17 +255,7 @@ func (e *ExecutionEngine) executeTestRun(ctx context.Context, run *TestRun) erro
 		return fmt.Errorf("device lookup: %w", err)
 	}
 
-	// Step 2a: Load test suite
-	suite, err := e.loadTestSuite(run.TestSuiteID, device)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		e.store.UpdateTestRunStatus(runCtx, run.ID, TestRunStatusErrored,
-			fmt.Sprintf("failed to load test suite: %v", err))
-		return fmt.Errorf("failed to load test suite: %w", err)
-	}
-
-	// Step 2b: Gate on target_mode.
+	// Step 2a: Gate on target_mode.
 	if !deviceSupportsQEMU(device.TargetModes) {
 		msg := fmt.Sprintf(
 			"skipped: device %q target_modes %v does not include 'qemu'; "+
@@ -290,6 +280,16 @@ func (e *ExecutionEngine) executeTestRun(ctx context.Context, run *TestRun) erro
 		}
 		span.SetStatus(codes.Ok, "skipped non-QEMU device")
 		return nil
+	}
+
+	// Step 2b: Load test suite
+	suite, err := e.loadTestSuite(run.TestSuiteID, device)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		e.store.UpdateTestRunStatus(runCtx, run.ID, TestRunStatusErrored,
+			fmt.Sprintf("failed to load test suite: %v", err))
+		return fmt.Errorf("failed to load test suite: %w", err)
 	}
 
 	// Step 2c: Gate on Resource Allocator budget

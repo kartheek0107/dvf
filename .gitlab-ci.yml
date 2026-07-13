@@ -8,6 +8,9 @@ variables:
   # Share directory on the CI runner (mirrors the QEMU 9p share).
   # In production CI, this path must be available to the QEMU runner.
   SHARE_DIR: "/home/kartheekbudime/qemu-rootfs/share"
+  # Configuration directory path (can be overridden to point to CDAC configurations)
+  DVF_CONFIG_DIR: "go-orchestrator/configs"
+
 
 # ---------------------------------------------------------------------------
 # Build Go Orchestrator
@@ -17,8 +20,12 @@ build-orchestrator:
   image: golang:1.21-alpine
   script:
     - cd go-orchestrator
-    - go build -v ./...
+    - go build -v -o orchestrator ./cmd/orchestrator
     - go test -v ./...
+  artifacts:
+    paths:
+      - go-orchestrator/orchestrator
+    expire_in: 1 day
 
 # ---------------------------------------------------------------------------
 # Build C Test Binaries (existing DVF tests)
@@ -30,6 +37,10 @@ build-test-binaries:
     - apt-get update && apt-get install -y make
     - cd c-test-binaries
     - make -j4
+  artifacts:
+    paths:
+      - c-test-binaries/
+    expire_in: 1 day
 
 # ---------------------------------------------------------------------------
 # Build & Deploy Vishwa Artifacts to 9p Share
@@ -119,9 +130,39 @@ orchestrate-validation:
   stage: test
   image: python:3.11-slim
   needs:
+    - build-orchestrator
     - deploy-vishwa
   before_script:
-    - apt-get update && apt-get install -y git
+    - apt-get update && apt-get install -y git curl
   script:
-    # Run impact analyzer (compares last push to current HEAD)
-    - python3 scripts/ci_impact_analyzer.py --dry-run
+    # 1. Start the orchestrator in the background using memory storage
+    - ./go-orchestrator/orchestrator --config "$DVF_CONFIG_DIR" --storage memory > orchestrator.log 2>&1 &
+    - ORCHESTRATOR_PID=$!
+    
+    # 2. Wait for the orchestrator REST API to become ready
+    - echo "Waiting for orchestrator to start..."
+    - |
+      for i in {1..30}; do
+        if curl -s http://localhost:8080/healthz > /dev/null; then
+          echo "Orchestrator is ready!"
+          break
+        fi
+        sleep 1
+      done
+      
+    # 3. Check if the orchestrator process is still running
+    - |
+      if ! kill -0 $ORCHESTRATOR_PID 2>/dev/null; then
+        echo "Orchestrator failed to start. Logs:"
+        cat orchestrator.log
+        exit 1
+      fi
+      
+    # 4. Run the CI impact analyzer (without dry-run to execute tests)
+    - echo "Running DVF CI Impact Analyzer..."
+    - python3 scripts/ci_impact_analyzer.py
+    - ANALYZER_EXIT_CODE=$?
+    
+    # 5. Clean up the orchestrator service
+    - kill $ORCHESTRATOR_PID || true
+    - exit $ANALYZER_EXIT_CODE

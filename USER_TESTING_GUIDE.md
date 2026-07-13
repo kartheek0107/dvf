@@ -244,3 +244,32 @@ If you need to stop a test run:
 curl -X POST http://localhost:8080/api/v1/test-runs/YOUR_TEST_RUN_ID/cancel -d '{}'
 ```
 
+---
+
+## 5. Automated CI/CD Validation (Git Push Lifecycle)
+
+To ensure continuous integration and validation, the framework is integrated with GitLab CI/CD. The pipeline automates the entire validation workflow on every `git push`.
+
+### 5.1 Pipeline Stages
+The CI pipeline (`.gitlab-ci.yml`) is split into three automated stages:
+1. **`build`**:
+   - Compiles the Go Orchestrator binary (`go-orchestrator/orchestrator`).
+   - Compiles all C validation test binaries (`c-test-binaries`).
+2. **`deploy`**:
+   - Compiles the GPGPU PCIe driver (`gpgpu_pcie_ep_driver.ko`).
+   - Gathers the driver module, guest agent scripts, python venv dependencies, and Vishwa tests, and copies them to the host's QEMU 9p share directory (`/home/kartheekbudime/qemu-rootfs/share`).
+3. **`test`**:
+   - Spins up the Go Orchestrator daemon in the background (`--storage memory`).
+   - Polls the `/healthz` endpoint on port 8080 until the orchestrator is healthy.
+   - Executes the DVF CI Impact Analyzer (`scripts/ci_impact_analyzer.py`).
+   - Cleanly terminates the background orchestrator daemon and exits with the test suite's exit code.
+
+### 5.2 Change Impact Analysis & Kahn's DAG
+The `scripts/ci_impact_analyzer.py` script automatically:
+- Compares the current git push against the base branch (`master`).
+- Maps changed files (e.g. driver sources, tests, sidecars) to their corresponding test suites using JSON sidecars.
+- Resolves dependencies between test suites topologically using **Kahn's DAG algorithm**.
+- Submits only the affected/impacted test suites to the Orchestrator's REST API and polls them to completion.
+- If no files changed or if driver source code itself changed, it schedules all test suites to run.
+
+

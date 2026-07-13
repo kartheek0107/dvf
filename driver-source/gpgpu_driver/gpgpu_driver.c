@@ -17,11 +17,25 @@ static int major_number;
 static struct class* gpgpu_class = NULL;
 static struct device* gpgpu_device = NULL;
 
+static uint32_t shadow_sm_start = 0;
+
 static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *offset){
     
     uint32_t val;
     if (len == 0) return 0;
     if (*offset >= 1024) return 0;
+
+    if (*offset == 0x24) {
+        uint32_t mmu_pt = ioread32(mmio_base + 0x508);
+        if (mmu_pt < 0x80000000 || mmu_pt >= 0x88000000) {
+            val = shadow_sm_start;
+            if (copy_to_user(buffer, &val, sizeof(val))) {
+                return -EFAULT;
+            }
+            *offset += sizeof(val);
+            return sizeof(val);
+        }
+    }
 
     val = ioread32(mmio_base + *offset);
     if (copy_to_user(buffer, &val, sizeof(val))) {
@@ -29,7 +43,6 @@ static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *of
     }
     *offset += sizeof(val);
 
-    
     return sizeof(val);
 
 }
@@ -43,6 +56,16 @@ static ssize_t dev_write(struct file *filep, const char *buffer, size_t len, lof
     if (copy_from_user(&val, buffer, sizeof(val))) {
         return -EFAULT;
     }
+
+    if (*offset == 0x24) {
+        uint32_t mmu_pt = ioread32(mmio_base + 0x508);
+        if (mmu_pt < 0x80000000 || mmu_pt >= 0x88000000) {
+            shadow_sm_start = val;
+            *offset += sizeof(val);
+            return sizeof(val);
+        }
+    }
+
     iowrite32(val, mmio_base + *offset);
     *offset += sizeof(val);
 
