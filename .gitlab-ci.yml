@@ -65,7 +65,10 @@ deploy-vishwa:
   script:
     # ---- Step 1: Build the GPGPU PCIe driver ----
     - echo "=== Building GPGPU driver ==="
-    - make -C driver-source/gpgpu_driver -j4
+    - 'KDIR="/lib/modules/$(uname -r)/build"'
+    - 'if [ ! -d "$KDIR" ]; then KDIR=$(find /lib/modules -maxdepth 2 -name "build" | head -n 1); fi'
+    - 'if [ -z "$KDIR" ]; then echo "WARNING: No kernel build directory found, falling back to default Makefile KDIR"; else echo "Using KDIR=$KDIR"; fi'
+    - 'if [ -n "$KDIR" ]; then make -C driver-source/gpgpu_driver KDIR="$KDIR" -j4; else make -C driver-source/gpgpu_driver -j4; fi'
     - ls -la driver-source/gpgpu_driver/gpgpu_pcie_ep_driver.ko
 
     # ---- Step 2: Build Vishwa test binaries ----

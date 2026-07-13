@@ -34,13 +34,14 @@ func LoadDeviceRegistry(configDir string) (*DeviceRegistry, error) {
 	return reg, nil
 }
 
-// loadJSON is a helper that reads a JSON file and unmarshals it into the target.
+// loadJSON is a helper that reads a JSON file, expands environment variables, and unmarshals it into the target.
 func loadJSON(path string, target interface{}) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("reading %s: %w", path, err)
 	}
-	if err := json.Unmarshal(data, target); err != nil {
+	expanded := os.ExpandEnv(string(data))
+	if err := json.Unmarshal([]byte(expanded), target); err != nil {
 		return fmt.Errorf("parsing %s: %w", path, err)
 	}
 	return nil
