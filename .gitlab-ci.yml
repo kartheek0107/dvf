@@ -33,17 +33,17 @@ stages:
 variables:
   # ── Global paths ────────────────────────────────────────────────────────────
   DVF_API_URL:    "http://localhost:8080"
-  SHARE_DIR:      "$HOME/qemu-rootfs/share"
+  SHARE_DIR:      "/home/kartheekbudime/qemu-rootfs/share"
   DVF_CONFIG_DIR: "go-orchestrator/configs"
 
   # ── CDAC / Vishwa source paths (on the CI runner) ──────────────────────────
   # Override these if the Vishwa source lives elsewhere on your runner.
-  VISHWA_CODE_DIR: "$HOME/Downloads/CDAC/FW_SW_Milestone_2/code"
+  VISHWA_CODE_DIR: "/home/kartheekbudime/Downloads/CDAC/FW_SW_Milestone_2/code"
 
   # ── Kernel source for driver compilation ────────────────────────────────────
   # The real GPGPU driver Makefile defaults to $HOME/VirtualMachines/linux.
   # This variable lets you override it from the GitLab CI settings.
-  KERNEL_BUILD_DIR: "$HOME/VirtualMachines/linux"
+  KERNEL_BUILD_DIR: "/home/kartheekbudime/VirtualMachines/linux"
 
   # ── Git diff base for impact analysis ───────────────────────────────────────
   GIT_DEPTH: "0"   # fetch full history so CI can diff against any ancestor
