@@ -388,6 +388,11 @@ orchestrate-validation:
     - build-orchestrator
     - deploy-share
   script:
+    # ── 0. Cleanup any stale processes ────────────────────────────────────
+    - pkill -f "qemu-system-x86_64.*dvf" 2>/dev/null || true
+    - pkill -f "orchestrator.*--storage" 2>/dev/null || true
+    - sleep 2
+
     # ── 1. Start the orchestrator (memory storage for CI, no postgres needed)
     - echo "=== Starting DVF Orchestrator (memory storage) ==="
     - |
