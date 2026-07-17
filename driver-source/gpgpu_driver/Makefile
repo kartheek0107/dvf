@@ -11,6 +11,6 @@ ccflags-y := -I. -Iinclude
 KDIR := /home/kartheekbudime/VirtualMachines/linux
 
 all: 
-	make -C $(KDIR) M=$(PWD) modules 
+	make -C $(KDIR) M=$(CURDIR) modules 
 clean: 
-	make -C $(KDIR) M=$(PWD) clean 
+	make -C $(KDIR) M=$(CURDIR) clean 
