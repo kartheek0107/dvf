@@ -10,7 +10,10 @@
 
 CC      ?= gcc
 CFLAGS  := -Wall -Wextra -O2 -std=gnu11 -I common
-LDFLAGS := -lpthread
+# -Wl,-rpath,'$$ORIGIN/lib': bake a relative RPATH into every binary so the
+# dynamic linker automatically searches a lib/ directory placed next to the
+# binary at runtime — no LD_LIBRARY_PATH changes needed.
+LDFLAGS := -lpthread -Wl,-rpath,'$$ORIGIN/lib'
 
 # Common source (linked into every test binary)
 COMMON_SRC := common/test_framework.c

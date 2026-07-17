@@ -563,9 +563,24 @@ def run_tests(vm: QEMUInstance, cfg: dict) -> list:
         # Make binary executable
         vm.run_command(f"chmod +x {binary}")
 
+        # cd into the test's own directory before running so that relative asset
+        # paths (input.jpg, input.png, bias.txt, kernel.cl, etc.) resolve correctly
+        binary_dir = binary.rsplit("/", 1)[0]
+
         # Run the test binary with the required env variables for the Vishwa runtime
         lib_dir = f"{guest_mount}/vishwa_tests/lib"
-        icd_dir = f"{lib_dir}/OpenCL/vendors"
+
+        # ── Strategy 1: Self-Contained Bundles ────────────────────────────────
+        # If the test author placed a lib/ directory next to their binary, prepend
+        # it to LD_LIBRARY_PATH and the Vishwa loader path automatically.
+        bundled_lib = f"{binary_dir}/lib"
+        bundled_check, _ = vm.run_command(f"test -d {bundled_lib} && echo yes || echo no")
+        if bundled_check.strip() == "yes":
+            info(f"  Found bundled lib/ at {bundled_lib} — prepending to library path")
+            lib_dir = f"{bundled_lib}:{lib_dir}"
+        # ──────────────────────────────────────────────────────────────────
+
+        icd_dir = f"{guest_mount}/vishwa_tests/lib/OpenCL/vendors"
         env_prefix = (
             "EMCONFIG_PATH=/mnt/hw_bit_file "
             "XRT_DEVICE_INDEX=0 "
@@ -579,10 +594,7 @@ def run_tests(vm: QEMUInstance, cfg: dict) -> list:
             "LLVM_PREFIX=/tmp/toolchain/llvm-vishwa"
         )
         # Use the host ld-linux to bypass the guest's old glibc
-        loader = f"{lib_dir}/ld-linux-x86-64.so.2"
-        # cd into the test's own directory before running so that relative asset paths
-        # (input.jpg, input.png, bias.txt, kernel.cl, etc.) resolve correctly
-        binary_dir = binary.rsplit("/", 1)[0]
+        loader = f"{guest_mount}/vishwa_tests/lib/ld-linux-x86-64.so.2"
         t_start = time.time()
         output, rc = vm.run_command(
             f"cd {binary_dir} && {env_prefix} {loader} --library-path {lib_dir} {binary}",
@@ -687,11 +699,11 @@ def run_tests(vm: QEMUInstance, cfg: dict) -> list:
         # Tests like vecaddx don't output JSON — they just print a final verdict.
         if not json_found:
             full_output_upper = output.upper()
-            if "TEST PASSED" in full_output_upper or (rc == 0 and "PASSED" in full_output_upper):
+            if ("TEST PASSED" in full_output_upper or (rc == 0 and "PASSED" in full_output_upper)) and not ("GPURT ERROR" in full_output_upper or "DEVICE OPEN FAILED" in full_output_upper or "IOCTL FAILED" in full_output_upper):
                 suite_result["results"] = [{"test": suite_name, "status": "PASS", "duration_ms": round(elapsed_ms, 1)}]
                 suite_result["summary"] = {"total": 1, "passed": 1, "failed": 0, "duration_ms": round(elapsed_ms, 1)}
                 json_found = True
-            elif "TEST FAILED" in full_output_upper or "FAILED!" in full_output_upper or rc != 0:
+            elif "TEST FAILED" in full_output_upper or "FAILED!" in full_output_upper or rc != 0 or ("GPURT ERROR" in full_output_upper or "DEVICE OPEN FAILED" in full_output_upper or "IOCTL FAILED" in full_output_upper):
                 # Extract a short error reason if present
                 err_hint = ""
                 for ln in lines:
@@ -699,7 +711,7 @@ def run_tests(vm: QEMUInstance, cfg: dict) -> list:
                         err_hint = ln.strip()[:120]
                         break
                 suite_result["results"] = [{"test": suite_name, "status": "FAIL", "duration_ms": round(elapsed_ms, 1),
-                                            "message": err_hint or f"exit code {rc}"}]
+                                            "message": err_hint or "hardware/driver initialization failed"}]
                 suite_result["summary"] = {"total": 1, "passed": 0, "failed": 1, "duration_ms": round(elapsed_ms, 1)}
                 json_found = True
 

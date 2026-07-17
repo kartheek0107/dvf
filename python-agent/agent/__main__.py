@@ -207,7 +207,7 @@ def parse_vishwa_output(output: str, suite_name: str, elapsed_ms: float) -> dict
     # Strategy 4: plain-text "TEST PASSED!" / "FAILED!" sentinel
     if not json_found:
         upper = output.upper()
-        if "TEST PASSED" in upper or ("PASSED" in upper):
+        if ("TEST PASSED" in upper or "PASSED" in upper) and not ("GPURT ERROR" in upper or "DEVICE OPEN FAILED" in upper or "IOCTL FAILED" in upper):
             suite_result["results"] = [{"test": suite_name, "status": "PASS",
                                         "duration_ms": round(elapsed_ms, 1)}]
             suite_result["summary"] = {"total": 1, "passed": 1, "failed": 0,
@@ -220,7 +220,7 @@ def parse_vishwa_output(output: str, suite_name: str, elapsed_ms: float) -> dict
                     break
             suite_result["results"] = [{"test": suite_name, "status": "FAIL",
                                         "duration_ms": round(elapsed_ms, 1),
-                                        "message": err_hint or "non-zero exit"}]
+                                        "message": err_hint or "hardware/driver initialization failed"}]
             suite_result["summary"] = {"total": 1, "passed": 0, "failed": 1,
                                        "duration_ms": round(elapsed_ms, 1)}
 
@@ -474,6 +474,22 @@ class DVFAgent:
         run_env = os.environ.copy()
         run_env.update({k: str(v) for k, v in extra_env.items()})
 
+        # ── Strategy 1: Self-Contained Bundles ────────────────────────────────
+        # If the test author placed a lib/ directory next to their binary,
+        # automatically prepend it to LD_LIBRARY_PATH and the Vishwa loader
+        # path.  No CI YAML changes or Packer rebuilds required.
+        binary_dir_resolved = binary_dir or os.path.dirname(binary)
+        bundled_lib = os.path.join(binary_dir_resolved, "lib")
+        if os.path.isdir(bundled_lib):
+            print(f"[agent] Found bundled lib/ at {bundled_lib} — prepending to library path")
+            existing_ldpath = run_env.get("LD_LIBRARY_PATH", "")
+            run_env["LD_LIBRARY_PATH"] = (
+                f"{bundled_lib}:{existing_ldpath}" if existing_ldpath else bundled_lib
+            )
+            # Also prepend to the Vishwa loader's --library-path
+            lib_dir = f"{bundled_lib}:{lib_dir}" if lib_dir else bundled_lib
+        # ─────────────────────────────────────────────────────────────────────
+
         # Make binary executable
         try:
             os.chmod(binary, 0o755)
@@ -543,6 +559,26 @@ class DVFAgent:
         # Parse structured results from raw output
         parsed = parse_vishwa_output(raw_output + "\n" + raw_logs, suite_name, elapsed_ms)
         json_output = json.dumps(parsed)
+
+        # ── Status reconciliation ─────────────────────────────────────────────
+        # A binary may exit 0 even when hardware/GPURT errors occurred (e.g.
+        # vecaddx exits 0 despite [GPURT ERROR] device open failures).
+        # The parser has already correctly identified these as failures, so
+        # we MUST trust the parsed result over the raw exit code.
+        if status == "passed":
+            summary = parsed.get("summary", {})
+            parsed_failed = summary.get("failed", 0)
+            parsed_passed = summary.get("passed", 0)
+            parsed_total  = summary.get("total", 0)
+            # Mark failed if the parser found failures, OR if it found zero
+            # passes on a non-empty run (nothing succeeded at all).
+            if parsed_failed > 0 or (parsed_total > 0 and parsed_passed == 0):
+                status = "failed"
+                print(
+                    f"[agent] Status reconciled: exit code was 0 but parser detected "
+                    f"{parsed_failed} failure(s) / {parsed_passed} pass(es) — marking FAILED"
+                )
+        # ─────────────────────────────────────────────────────────────────────
 
         return json_output, status, raw_logs
 

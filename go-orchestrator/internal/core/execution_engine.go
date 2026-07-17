@@ -548,11 +548,20 @@ func (e *ExecutionEngine) executeTestRun(ctx context.Context, run *TestRun) erro
 		// Step 6: Execute tests
 		err = e.runWorkflow(runCtx, run, device, vmInstance, suite)
 		if err != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-			e.store.UpdateTestRunStatus(runCtx, run.ID, TestRunStatusFailed,
-				fmt.Sprintf("workflow execution failed: %v", err))
-			return fmt.Errorf("executing workflow: %w", err)
+			if wfErr, ok := err.(ErrWorkflowFailed); ok {
+				e.logger.Info("workflow completed with test failures",
+					zap.String("id", run.ID),
+					zap.Int("failed", wfErr.Failed),
+					zap.Int("skipped", wfErr.Skipped),
+				)
+				err = nil
+			} else {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
+				e.store.UpdateTestRunStatus(runCtx, run.ID, TestRunStatusErrored,
+					fmt.Sprintf("workflow execution failed: %v", err))
+				return fmt.Errorf("executing workflow: %w", err)
+			}
 		}
 	} else {
 		// No agent coordinator — mark as passed for now (development mode)
@@ -1108,8 +1117,18 @@ func (e *ExecutionEngine) runWorkflow(ctx context.Context, run *TestRun, device 
 	p, f, sk := w.Summary()
 	e.logger.Info("workflow summary", zap.Int("passed", p), zap.Int("failed", f), zap.Int("skipped", sk))
 	if f > 0 || sk > 0 {
-		return fmt.Errorf("workflow execution completed with failures: %d failed, %d skipped", f, sk)
+		return ErrWorkflowFailed{Failed: f, Skipped: sk}
 	}
 
 	return nil
+}
+
+// ErrWorkflowFailed is returned when a workflow completes execution but has failing or skipped steps.
+type ErrWorkflowFailed struct {
+	Failed  int
+	Skipped int
+}
+
+func (e ErrWorkflowFailed) Error() string {
+	return fmt.Sprintf("workflow execution completed with failures: %d failed, %d skipped", e.Failed, e.Skipped)
 }

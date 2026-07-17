@@ -128,10 +128,13 @@ func (m *VMManager) BuildQEMUArgs(vmID string, vmCfg *VMConfig) []string {
 	overlayPath := filepath.Join("/tmp/dvf/overlays", vmID+".qcow2")
 
 	args := []string{
+		// Machine type: q35 is required for MSI-X support (real GPGPU driver
+		// uses pci_enable_msix_exact which fails on the default i440fx machine).
+		"-machine", "q35",
+		"-enable-kvm",
+		"-cpu", "host",
+
 		// Kernel + per-VM qcow2 overlay.
-		// The overlay is backed by rootfs.ext4 (read-only base). QEMU
-		// never takes a write lock on rootfs.ext4, so multiple VMs can
-		// run simultaneously without file-lock conflicts.
 		"-kernel", kernelPath,
 		"-drive", fmt.Sprintf("file=%s,format=qcow2,if=virtio", overlayPath),
 		// Pass vm_id on cmdline so the agent can self-identify without networking
@@ -144,14 +147,14 @@ func (m *VMManager) BuildQEMUArgs(vmID string, vmCfg *VMConfig) []string {
 		// Display
 		"-nographic",
 
-		// 9p virtio share (host ↔ guest file sharing)
-		"-virtfs", fmt.Sprintf("local,path=%s,mount_tag=hostshare,security_model=mapped,id=hostshare", shareDir),
+		// 9p virtio share: security_model=none matches original runQemu.sh
+		// and avoids mapped-file ownership issues in the guest.
+		"-virtfs", fmt.Sprintf("local,path=%s,mount_tag=hostshare,security_model=none,id=hostshare", shareDir),
 
 		// QMP control socket
 		"-qmp", fmt.Sprintf("unix:%s,server,wait=off", qmpSocket),
 
 		// virtio-serial bus + agent channel
-		// ponytail: single chardev per VM; upgrade to multi-port if needed
 		"-chardev", fmt.Sprintf("socket,id=agent-chr,path=%s,server=on,wait=off", agentSocket),
 		"-device", "virtio-serial-pci",
 		"-device", "virtserialport,chardev=agent-chr,name=dvf.agent.0",

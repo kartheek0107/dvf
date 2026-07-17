@@ -1,30 +1,16 @@
-# Build the gpgpu_driver kernel module.
-#
-# The kernel module source is gpgpu_driver.c, but the registry and share
-# directory expect the output to be named gpgpu_pcie_ep_driver.ko.
-# The 'install' target copies/renames it to SHARE_DIR.
-#
-# Usage:
-#   make                           — build the module
-#   make KDIR=/path/to/linux       — build against a specific kernel
-#   make install                   — build + copy to SHARE_DIR
-#   make clean                     — clean build artifacts
+MODULE_NAME=gpgpu_pcie_ep_driver
 
-obj-m += gpgpu_driver.o
+$(MODULE_NAME)-y := src/gpgpu_pcie_ep_driver.o \
+                    src/gpgpu_memory_manager.o \
+                    src/gpgpu_dma.o
 
-KDIR     ?= /home/kartheekbudime/VirtualMachines/linux
-SHARE_DIR ?= /home/kartheekbudime/qemu-rootfs/share
+obj-m := $(MODULE_NAME).o
 
-# Output name expected by device_registry.json and the guest agent
-TARGET_KO = gpgpu_pcie_ep_driver.ko
+ccflags-y := -I. -Iinclude
 
-all:
-	$(MAKE) -C $(KDIR) M=$(shell pwd) modules
+KDIR := /home/kartheekbudime/VirtualMachines/linux
 
-# Copy and rename the .ko to the 9p share directory
-install: all
-	cp $(shell pwd)/gpgpu_driver.ko $(SHARE_DIR)/$(TARGET_KO)
-	@echo "Installed: $(SHARE_DIR)/$(TARGET_KO)"
-
-clean:
-	$(MAKE) -C $(KDIR) M=$(shell pwd) clean
+all: 
+	make -C $(KDIR) M=$(PWD) modules 
+clean: 
+	make -C $(KDIR) M=$(PWD) clean 

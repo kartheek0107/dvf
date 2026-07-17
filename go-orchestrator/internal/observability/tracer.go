@@ -22,7 +22,6 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
-	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -55,29 +54,26 @@ func InitTracer(cfg config.TelemetryConfig) (trace.TracerProvider, func(context.
 		return nil, nil, fmt.Errorf("creating OTel resource: %w", err)
 	}
 
+	// If tracing is disabled or not configured, return a no-op tracer provider
+	// to prevent connection errors or console log clutter.
+	if cfg.TraceEndpoint == "" || cfg.TraceEndpoint == "none" {
+		return otel.GetTracerProvider(), func(context.Context) {}, nil
+	}
+
 	var exporter sdktrace.SpanExporter
 
-	if cfg.TraceEndpoint != "" {
-		// OTLP gRPC exporter → Jaeger/Tempo
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
+	// OTLP gRPC exporter → Jaeger/Tempo
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-		exp, err := otlptracegrpc.New(ctx,
-			otlptracegrpc.WithEndpoint(cfg.TraceEndpoint),
-			otlptracegrpc.WithInsecure(),
-		)
-		if err != nil {
-			return nil, nil, fmt.Errorf("creating OTLP exporter: %w", err)
-		}
-		exporter = exp
-	} else {
-		// Stdout exporter — no infrastructure required
-		exp, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
-		if err != nil {
-			return nil, nil, fmt.Errorf("creating stdout exporter: %w", err)
-		}
-		exporter = exp
+	exp, err := otlptracegrpc.New(ctx,
+		otlptracegrpc.WithEndpoint(cfg.TraceEndpoint),
+		otlptracegrpc.WithInsecure(),
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("creating OTLP exporter: %w", err)
 	}
+	exporter = exp
 
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(exporter),

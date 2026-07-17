@@ -49,7 +49,7 @@
   },
   "telemetry": {
     "metrics_port": 9090,
-    "trace_endpoint": "localhost:4317",
+    "trace_endpoint": "none",
     "log_level": "info",
     "log_format": "console"
   },
