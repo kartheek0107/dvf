@@ -59,13 +59,13 @@ runner-smoke-test:
     - dvf-runner
   script:
     - echo "=== Runner smoke test ==="
-    - echo "Runner hostname  : $(hostname)"
-    - echo "Runner user      : $(whoami)"
-    - echo "Runner OS        : $(uname -a)"
-    - echo "Available tools  : go=$(go version 2>/dev/null | cut -d' ' -f3 || echo 'not found')  python3=$(python3 --version 2>&1)  make=$(make --version 2>/dev/null | head -1 || echo 'not found')"
-    - echo "/dev/kvm present : $(ls /dev/kvm 2>/dev/null && echo YES || echo 'NO — KVM not available')"
-    - echo "Project dir      : $CI_PROJECT_DIR"
-    - echo "Commit           : $CI_COMMIT_SHORT_SHA ($CI_COMMIT_REF_NAME)"
+    - echo "Hostname=$(hostname) User=$(whoami)"
+    - uname -a
+    - go version 2>/dev/null || echo "go not found"
+    - python3 --version 2>&1 || echo "python3 not found"
+    - make --version 2>/dev/null | head -1 || echo "make not found"
+    - ls /dev/kvm 2>/dev/null && echo "KVM=YES" || echo "KVM=NO"
+    - echo "Project=$CI_PROJECT_DIR Commit=$CI_COMMIT_SHORT_SHA Branch=$CI_COMMIT_REF_NAME"
     - echo "=== Smoke test PASSED ==="
 
 
