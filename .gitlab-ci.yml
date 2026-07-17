@@ -1,171 +1,463 @@
+# =============================================================================
+# DVF CI/CD Pipeline — Driver Validation Framework
+#
+# Stages:
+#   build   → compile driver, orchestrator, C test binaries, run unit tests
+#   deploy  → bundle all artifacts into the 9p share directory
+#   test    → launch orchestrator + QEMU VMs, run validation suites
+#
+# Strategy 1 — Self-Contained Test Bundles:
+#   Every test suite's binary is compiled with -Wl,-rpath,'$ORIGIN/lib' so the
+#   runtime linker inside the guest automatically resolves .so files from a
+#   lib/ directory placed next to the binary.  The deploy stage runs
+#   scripts/bundle_libs.sh to populate those lib/ directories.  Hardware
+#   engineers adding new tests never need to modify this file or rebuild the VM.
+#
+# QEMU / KVM requirements:
+#   The CI runner executing the "test" stage MUST:
+#     • Have /dev/kvm available (nested virtualisation or bare-metal runner)
+#     • Have qemu-system-x86_64 ≥ 7.x with the gp_gpu device model compiled in
+#     • Have the QEMU binaries at $HOME/VirtualMachines/qemu_bin/bin/
+#     • Have the Linux bzImage at $HOME/VirtualMachines/linux/arch/x86/boot/bzImage
+#     • Have the rootfs at $HOME/qemu-rootfs/rootfs.ext4
+#   In GitLab, set privileged = true in the runner's config.toml and pass
+#   /dev/kvm to the Docker container if using a Docker-based executor.
+# =============================================================================
+
 stages:
+  - smoke
   - build
   - deploy
   - test
 
 variables:
-  DVF_API_URL: "http://localhost:8080"
-  # Share directory on the CI runner (mirrors the QEMU 9p share).
-  # In production CI, this path must be available to the QEMU runner.
-  SHARE_DIR: "/home/kartheekbudime/qemu-rootfs/share"
-  # Configuration directory path (can be overridden to point to CDAC configurations)
+  # ── Global paths ────────────────────────────────────────────────────────────
+  DVF_API_URL:    "http://localhost:8080"
+  SHARE_DIR:      "$HOME/qemu-rootfs/share"
   DVF_CONFIG_DIR: "go-orchestrator/configs"
 
+  # ── CDAC / Vishwa source paths (on the CI runner) ──────────────────────────
+  # Override these if the Vishwa source lives elsewhere on your runner.
+  VISHWA_CODE_DIR: "$HOME/Downloads/CDAC/FW_SW_Milestone_2/code"
+
+  # ── Kernel source for driver compilation ────────────────────────────────────
+  # The real GPGPU driver Makefile defaults to $HOME/VirtualMachines/linux.
+  # This variable lets you override it from the GitLab CI settings.
+  KERNEL_BUILD_DIR: "$HOME/VirtualMachines/linux"
+
+  # ── Git diff base for impact analysis ───────────────────────────────────────
+  GIT_DEPTH: "0"   # fetch full history so CI can diff against any ancestor
+
+
+# =============================================================================
+# Stage 0 — SMOKE TEST (runner connectivity check, no dependencies)
+# =============================================================================
+
+runner-smoke-test:
+  stage: smoke
+  tags:
+    - dvf-runner
+  script:
+    - echo "=== Runner smoke test ==="
+    - echo "Runner hostname  : $(hostname)"
+    - echo "Runner user      : $(whoami)"
+    - echo "Runner OS        : $(uname -a)"
+    - echo "Available tools  : go=$(go version 2>/dev/null | cut -d' ' -f3 || echo 'not found')  python3=$(python3 --version 2>&1)  make=$(make --version 2>/dev/null | head -1 || echo 'not found')"
+    - echo "/dev/kvm present : $(ls /dev/kvm 2>/dev/null && echo YES || echo 'NO — KVM not available')"
+    - echo "Project dir      : $CI_PROJECT_DIR"
+    - echo "Commit           : $CI_COMMIT_SHORT_SHA ($CI_COMMIT_REF_NAME)"
+    - echo "=== Smoke test PASSED ==="
+
+
+# =============================================================================
+# Stage 1 — BUILD
+# =============================================================================
 
 # ---------------------------------------------------------------------------
-# Build Go Orchestrator
+# 1a. Build Go Orchestrator + unit tests
 # ---------------------------------------------------------------------------
 build-orchestrator:
   stage: build
-  image: golang:1.26-alpine
+  tags:
+    - dvf-runner          # must be the self-hosted runner with QEMU/KVM
   script:
+    - echo "=== Building Go orchestrator ==="
     - cd go-orchestrator
-    - go build -v -o orchestrator ./cmd/orchestrator
-    - go test -v ./...
+    - go build -v -o orchestrator ./cmd/orchestrator/
+    - echo "=== Running Go unit tests ==="
+    - go test -v -count=1 ./...
   artifacts:
+    name: "orchestrator-${CI_COMMIT_SHORT_SHA}"
     paths:
       - go-orchestrator/orchestrator
     expire_in: 1 day
 
+
 # ---------------------------------------------------------------------------
-# Build C Test Binaries (existing DVF tests)
+# 1b. Python agent unit tests (pure stdlib — no Docker image needed)
 # ---------------------------------------------------------------------------
-build-test-binaries:
+test-agent:
   stage: build
-  image: gcc:13-bookworm
+  tags:
+    - dvf-runner
   script:
-    - apt-get update && apt-get install -y make
-    - cd c-test-binaries
-    - make -j4
-  artifacts:
-    paths:
-      - c-test-binaries/
-    expire_in: 1 day
+    - echo "=== Running Python agent unit tests ==="
+    - python3 -m unittest discover -s python-agent/tests -p "test_*.py" -v
+  allow_failure: false
+
 
 # ---------------------------------------------------------------------------
-# Build & Deploy Vishwa Artifacts to 9p Share
-#
-# This stage replicates what run_dvf_vishwa.sh steps 1-3 did manually:
-#   Step 1: Build the GPGPU driver .ko
-#   Step 2: Build the Vishwa test binaries
-#   Step 3: Copy everything to the 9p share directory
-#
-# The orchestrator + guest agent handle step 4 (execution inside the VM).
+# 1c. Build the real CDAC GPGPU driver (gpgpu_pcie_ep_driver.ko)
 # ---------------------------------------------------------------------------
-deploy-vishwa:
-  stage: deploy
-  image: ubuntu:22.04
-  needs:
-    - build-orchestrator
-  before_script:
-    - apt-get update && apt-get install -y
-        make gcc g++ linux-headers-generic
-        python3 python3-pip python3-venv git
-        cmake pkg-config
+build-driver:
+  stage: build
+  tags:
+    - dvf-runner
   script:
-    # ---- Step 1: Build the GPGPU PCIe driver ----
-    - echo "=== Building GPGPU driver ==="
-    - 'KDIR="/lib/modules/$(uname -r)/build"'
-    - 'if [ ! -d "$KDIR" ]; then KDIR=$(find /lib/modules -maxdepth 2 -name "build" | head -n 1); fi'
-    - 'if [ -z "$KDIR" ]; then echo "WARNING: No kernel build directory found, falling back to default Makefile KDIR"; else echo "Using KDIR=$KDIR"; fi'
-    - 'if [ -n "$KDIR" ]; then make -C driver-source/gpgpu_driver KDIR="$KDIR" -j4; else make -C driver-source/gpgpu_driver -j4; fi'
-    - ls -la driver-source/gpgpu_driver/gpgpu_pcie_ep_driver.ko
-
-    # ---- Step 2: Build Vishwa test binaries ----
-    # The Vishwa source is expected under test-suites/vishwa/.
-    # Adjust the make target to match your Vishwa build system.
-    - echo "=== Building Vishwa tests ==="
+    - echo "=== Building CDAC GPGPU PCIe driver ==="
     - |
-      if [ -f test-suites/vishwa/Makefile ]; then
-        make -C test-suites/vishwa -j4
-      elif [ -f test-suites/vishwa/build.sh ]; then
-        bash test-suites/vishwa/build.sh
+      if [ -d "$KERNEL_BUILD_DIR" ]; then
+        make -C driver-source/gpgpu_driver KDIR="$KERNEL_BUILD_DIR" -j4
       else
-        echo "WARN: No Vishwa build system found at test-suites/vishwa/ — skipping Vishwa build"
+        echo "ERROR: Kernel build directory not found at $KERNEL_BUILD_DIR"
+        echo "Set KERNEL_BUILD_DIR to the path of your kernel source tree."
+        exit 1
       fi
-
-    # ---- Step 3: Copy artifacts to the 9p share ----
-    - echo "=== Deploying artifacts to ${SHARE_DIR} ==="
-    - mkdir -p "${SHARE_DIR}"
-
-    # Driver .ko
-    - cp driver-source/gpgpu_driver/gpgpu_pcie_ep_driver.ko "${SHARE_DIR}/"
-
-    # Vishwa test tree
-    - |
-      if [ -d test-suites/vishwa/build ]; then
-        mkdir -p "${SHARE_DIR}/vishwa_tests"
-        cp -r test-suites/vishwa/build/. "${SHARE_DIR}/vishwa_tests/"
-      fi
-
-    # Agent bootstrap script (so it is available from the guest on first boot)
-    - cp python-agent/agent/start_agent.sh "${SHARE_DIR}/"
-    - chmod +x "${SHARE_DIR}/start_agent.sh"
-
-    # Agent source + proto stubs (Option A: bundle via share, no rootfs changes)
-    - mkdir -p "${SHARE_DIR}/python-agent"
-    - cp -r python-agent/. "${SHARE_DIR}/python-agent/"
-
-    # Pre-build a Python venv with grpcio into the share so the guest
-    # can run the agent without any internet access or rootfs changes.
-    # ponytail: if the rootfs already has grpcio (Option B), remove this block.
-    - |
-      if ! python3 -c "import grpc" 2>/dev/null; then
-        python3 -m venv "${SHARE_DIR}/agent-venv"
-        "${SHARE_DIR}/agent-venv/bin/pip" install --quiet grpcio protobuf
-      else
-        python3 -m venv "${SHARE_DIR}/agent-venv"
-        "${SHARE_DIR}/agent-venv/bin/pip" install --quiet grpcio protobuf
-      fi
-
-    - echo "=== Deploy complete ==="
-    - ls -la "${SHARE_DIR}/"
-
+    - ls -lh driver-source/gpgpu_driver/gpgpu_pcie_ep_driver.ko
+    - echo "Driver built successfully."
   artifacts:
+    name: "driver-${CI_COMMIT_SHORT_SHA}"
     paths:
       - driver-source/gpgpu_driver/gpgpu_pcie_ep_driver.ko
     expire_in: 1 day
 
+
 # ---------------------------------------------------------------------------
-# Analyze Impact & Trigger Orchestration (existing job)
+# 1d. Build DVF C test binaries (compiled with -rpath='$ORIGIN/lib')
 # ---------------------------------------------------------------------------
-orchestrate-validation:
-  stage: test
-  image: python:3.11-slim
+build-test-binaries:
+  stage: build
+  tags:
+    - dvf-runner
+  script:
+    - echo "=== Building DVF C test binaries ==="
+    - cd c-test-binaries
+    - make -j4
+    - echo "=== Verifying RPATH on sample binary ==="
+    - |
+      SAMPLE=$(find . -type f -executable -not -name "*.sh" | head -1)
+      if [ -n "$SAMPLE" ]; then
+        readelf -d "$SAMPLE" | grep -i rpath || echo "INFO: no RPATH (binary may be statically linked)"
+      fi
+  artifacts:
+    name: "c-test-binaries-${CI_COMMIT_SHORT_SHA}"
+    paths:
+      - c-test-binaries/
+    expire_in: 1 day
+
+
+# =============================================================================
+# Stage 2 — DEPLOY
+# Deploy all artifacts to the 9p share directory so the QEMU guest can access
+# them.  This mirrors what run_dvf_vishwa.sh (steps 1-3) did manually.
+# =============================================================================
+
+deploy-share:
+  stage: deploy
+  tags:
+    - dvf-runner
   needs:
     - build-orchestrator
-    - deploy-vishwa
-  before_script:
-    - apt-get update && apt-get install -y git curl
+    - build-driver
   script:
-    # 1. Start the orchestrator in the background using memory storage
-    - ./go-orchestrator/orchestrator --config "$DVF_CONFIG_DIR" --storage memory > orchestrator.log 2>&1 &
-    - ORCHESTRATOR_PID=$!
-    
-    # 2. Wait for the orchestrator REST API to become ready
-    - echo "Waiting for orchestrator to start..."
+    # ── 0. Ensure share directory tree exists ──────────────────────────────
+    - echo "=== Preparing 9p share at ${SHARE_DIR} ==="
     - |
-      for i in {1..30}; do
-        if curl -s http://localhost:8080/healthz > /dev/null; then
-          echo "Orchestrator is ready!"
+      mkdir -p "${SHARE_DIR}"
+      mkdir -p "${SHARE_DIR}/vishwa_tests/lib/OpenCL/vendors"
+      mkdir -p "${SHARE_DIR}/vishwa_tests/regression/vecaddx"
+      mkdir -p "${SHARE_DIR}/vishwa_tests/opencl/vecadd"
+      mkdir -p "${SHARE_DIR}/vishwa_tests/opencl/vecadd2"
+      mkdir -p "${SHARE_DIR}/vishwa_tests/opencl/ai_predict"
+      mkdir -p "${SHARE_DIR}/vishwa_tests/opencl/blur"
+      mkdir -p "${SHARE_DIR}/vishwa_tests/opencl/gray"
+      mkdir -p "${SHARE_DIR}/vishwa_tests/opencl/sgemm"
+      mkdir -p "${SHARE_DIR}/vishwa_tests/bin"
+      mkdir -p "${SHARE_DIR}/python-agent"
+
+    # ── 1. Deploy the GPGPU driver ─────────────────────────────────────────
+    - echo "=== Deploying GPGPU driver ==="
+    - cp driver-source/gpgpu_driver/gpgpu_pcie_ep_driver.ko "${SHARE_DIR}/"
+
+    # ── 2. Deploy the Python agent ─────────────────────────────────────────
+    - echo "=== Deploying DVF agent ==="
+    - cp -r python-agent/. "${SHARE_DIR}/python-agent/"
+    - cp python-agent/agent/start_agent.sh "${SHARE_DIR}/start_agent.sh"
+    - chmod +x "${SHARE_DIR}/start_agent.sh"
+
+    # ── 3. Build the Vishwa runtime and tests (from CDAC source) ──────────
+    - echo "=== Building Vishwa runtime and tests ==="
+    - |
+      if [ -f "${VISHWA_CODE_DIR}/vishwa_hw_testing_env/vishwa_run.sh" ]; then
+        cd "${VISHWA_CODE_DIR}/vishwa_hw_testing_env"
+        bash vishwa_run.sh
+        cd "$CI_PROJECT_DIR"
+        echo "Vishwa build complete."
+      else
+        echo "WARNING: Vishwa build script not found at ${VISHWA_CODE_DIR}/vishwa_hw_testing_env/vishwa_run.sh"
+        echo "Skipping Vishwa build — using pre-built artifacts in share if present."
+      fi
+
+    # ── 4. Deploy Vishwa runtime libraries ────────────────────────────────
+    - echo "=== Deploying Vishwa runtime libraries ==="
+    - |
+      VISHWA_BUILD="${VISHWA_CODE_DIR}/vishwa_hw_testing_env/build"
+      if [ -f "${VISHWA_BUILD}/runtime/xrt/libvishwa.so" ]; then
+        cp "${VISHWA_BUILD}/runtime/xrt/libvishwa.so"  "${SHARE_DIR}/vishwa_tests/lib/"
+        cp "${VISHWA_BUILD}/runtime/gpurt/libgpurt.so" "${SHARE_DIR}/vishwa_tests/lib/"
+        echo "Copied libvishwa.so and libgpurt.so"
+      else
+        echo "WARNING: Vishwa .so files not found — tests may fail inside guest"
+      fi
+
+    # ── 5. Deploy Vishwa test binaries ────────────────────────────────────
+    - echo "=== Deploying Vishwa test binaries ==="
+    - |
+      VISHWA_BUILD="${VISHWA_CODE_DIR}/vishwa_hw_testing_env/build"
+      copy_if_exists() {
+        src="$1"; dst="$2"
+        if [ -f "$src" ]; then cp "$src" "$dst" && echo "  Copied $(basename $src)"; \
+        else echo "  SKIP: $src not found"; fi
+      }
+      copy_if_exists "${VISHWA_BUILD}/tests/regression/vecaddx/vecaddx" \
+                     "${SHARE_DIR}/vishwa_tests/regression/vecaddx/vecaddx"
+      copy_if_exists "${VISHWA_BUILD}/tests/opencl/vecadd/vecadd"       \
+                     "${SHARE_DIR}/vishwa_tests/opencl/vecadd/vecadd"
+      copy_if_exists "${VISHWA_BUILD}/tests/opencl/vecadd2/vecadd2"     \
+                     "${SHARE_DIR}/vishwa_tests/opencl/vecadd2/vecadd2"
+      copy_if_exists "${VISHWA_BUILD}/tests/opencl/ai_predict/ai_predict"\
+                     "${SHARE_DIR}/vishwa_tests/opencl/ai_predict/ai_predict"
+      copy_if_exists "${VISHWA_BUILD}/tests/opencl/blur/blur"            \
+                     "${SHARE_DIR}/vishwa_tests/opencl/blur/blur"
+      copy_if_exists "${VISHWA_BUILD}/tests/opencl/gray/gray"            \
+                     "${SHARE_DIR}/vishwa_tests/opencl/gray/gray"
+      copy_if_exists "${VISHWA_BUILD}/tests/opencl/sgemm/sgemm"         \
+                     "${SHARE_DIR}/vishwa_tests/opencl/sgemm/sgemm"
+
+    # ── 6. Deploy per-test kernel assets (OpenCL .cl, images, weights) ────
+    - echo "=== Deploying per-test assets ==="
+    - |
+      TESTS_SRC="${VISHWA_CODE_DIR}/vishwa_hw_testing_env/tests"
+      cp_asset() {
+        src="$1"; dst="$2"
+        [ -f "$src" ] && cp "$src" "$dst" && echo "  Asset: $(basename $src)"
+      }
+      cp_asset "${TESTS_SRC}/opencl/vecadd/kernel.cl"         "${SHARE_DIR}/vishwa_tests/opencl/vecadd/"
+      cp_asset "${TESTS_SRC}/opencl/vecadd2/kernel.cl"        "${SHARE_DIR}/vishwa_tests/opencl/vecadd2/"
+      cp_asset "${TESTS_SRC}/opencl/sgemm/kernel.cl"          "${SHARE_DIR}/vishwa_tests/opencl/sgemm/"
+      cp_asset "${TESTS_SRC}/opencl/blur/kernel.cl"           "${SHARE_DIR}/vishwa_tests/opencl/blur/"
+      cp_asset "${TESTS_SRC}/opencl/blur/input.jpg"           "${SHARE_DIR}/vishwa_tests/opencl/blur/"
+      cp_asset "${TESTS_SRC}/opencl/gray/kernel.cl"           "${SHARE_DIR}/vishwa_tests/opencl/gray/"
+      cp_asset "${TESTS_SRC}/opencl/gray/input.jpg"           "${SHARE_DIR}/vishwa_tests/opencl/gray/"
+      cp_asset "${TESTS_SRC}/opencl/ai_predict/kernel.cl"     "${SHARE_DIR}/vishwa_tests/opencl/ai_predict/"
+      cp_asset "${TESTS_SRC}/opencl/ai_predict/input.png"     "${SHARE_DIR}/vishwa_tests/opencl/ai_predict/"
+      cp_asset "${TESTS_SRC}/opencl/ai_predict/bias.txt"      "${SHARE_DIR}/vishwa_tests/opencl/ai_predict/"
+      cp_asset "${TESTS_SRC}/opencl/ai_predict/weights.txt"   "${SHARE_DIR}/vishwa_tests/opencl/ai_predict/"
+
+    # ── 7. Deploy host dynamic linker & standard libraries ────────────────
+    # These are needed by the Vishwa ld-linux loader inside the guest.
+    - echo "=== Deploying host linker and standard libs ==="
+    - |
+      LIB="${SHARE_DIR}/vishwa_tests/lib"
+      cp_l() { [ -f "$1" ] && cp -L "$1" "$LIB/$2" && echo "  lib: $2" || echo "  SKIP: $1"; }
+      cp_l /lib64/ld-linux-x86-64.so.2         ld-linux-x86-64.so.2
+      cp_l /lib64/libc.so.6                    libc.so.6
+      cp_l /lib64/libm.so.6                    libm.so.6
+      cp_l /lib64/libpthread.so.0              libpthread.so.0
+      cp_l /lib64/libgcc_s.so.1               libgcc_s.so.1
+      cp_l /lib64/libstdc++.so.6              libstdc++.so.6
+
+    # ── 8. Strategy 1: Bundle per-test lib/ directories ───────────────────
+    # Run bundle_libs.sh for each Vishwa test binary.  This copies the exact
+    # .so files the binary needs into a lib/ directory next to it.
+    # The guest agent auto-detects these lib/ directories at runtime.
+    - echo "=== Bundling per-test runtime libraries (Strategy 1) ==="
+    - chmod +x scripts/bundle_libs.sh
+    - |
+      bundle_test() {
+        binary="$1"
+        if [ -f "$binary" ]; then
+          echo "  Bundling: $binary"
+          bash scripts/bundle_libs.sh "$binary" "$(dirname $binary)/lib" 2>&1 | \
+            grep -E "^  (COPY|WARN|SKIP|===|Done)" | sed 's/^/    /'
+        fi
+      }
+      bundle_test "${SHARE_DIR}/vishwa_tests/regression/vecaddx/vecaddx"
+      bundle_test "${SHARE_DIR}/vishwa_tests/opencl/vecadd/vecadd"
+      bundle_test "${SHARE_DIR}/vishwa_tests/opencl/vecadd2/vecadd2"
+      bundle_test "${SHARE_DIR}/vishwa_tests/opencl/ai_predict/ai_predict"
+      bundle_test "${SHARE_DIR}/vishwa_tests/opencl/blur/blur"
+      bundle_test "${SHARE_DIR}/vishwa_tests/opencl/gray/gray"
+      bundle_test "${SHARE_DIR}/vishwa_tests/opencl/sgemm/sgemm"
+
+    # ── 9. Deploy OpenCL ICD loader and PoCL runtime ──────────────────────
+    - echo "=== Deploying OpenCL / PoCL runtime ==="
+    - |
+      LIB="${SHARE_DIR}/vishwa_tests/lib"
+      if [ -f /usr/lib64/libOpenCL.so.1.0.0 ]; then
+        cp -L /usr/lib64/libOpenCL.so.1.0.0 "$LIB/libOpenCL.so.1.0.0"
+        cp -L /usr/lib64/libOpenCL.so.1.0.0 "$LIB/libOpenCL.so.1"
+        cp -L /usr/lib64/libOpenCL.so.1.0.0 "$LIB/libOpenCL.so"
+        echo "  OpenCL ICD loader deployed"
+      fi
+      POCL=$(find /usr/lib64 -name "libpocl.so.*.*.0" 2>/dev/null | head -1)
+      if [ -n "$POCL" ]; then
+        cp -L "$POCL" "$LIB/$(basename $POCL)"
+        POCL_SHORT=$(basename "$POCL" | sed 's/\.[0-9]*\.0$//')
+        ln -sf "$(basename $POCL)" "$LIB/${POCL_SHORT}" 2>/dev/null || \
+          cp -L "$POCL" "$LIB/${POCL_SHORT}"
+        echo "libpocl.so.2" > "${SHARE_DIR}/vishwa_tests/lib/OpenCL/vendors/pocl.icd"
+        echo "  PoCL deployed: $POCL"
+        # PoCL dependencies (LLVM, hwloc, libedit)
+        for dep in \
+            /usr/lib64/libhwloc.so.15 \
+            /usr/lib64/libedit.so.0 \
+            /lib64/libtinfo.so.6; do
+          [ -f "$dep" ] && cp -L "$dep" "$LIB/$(basename $dep)" && \
+            echo "  dep: $(basename $dep)"
+        done
+        LLVM=$(find /usr/lib64 -name "libLLVM.so.*" 2>/dev/null | head -1)
+        [ -n "$LLVM" ] && cp -L "$LLVM" "$LIB/$(basename $LLVM)" && \
+          echo "  dep: $(basename $LLVM)"
+        CLANG=$(find /usr/lib64 -name "libclang-cpp.so.*" 2>/dev/null | head -1)
+        [ -n "$CLANG" ] && cp -L "$CLANG" "$LIB/$(basename $CLANG)" && \
+          echo "  dep: $(basename $CLANG)"
+        # PoCL kernel bitcode + device plugins
+        mkdir -p "${SHARE_DIR}/vishwa_tests/share/pocl/include"
+        mkdir -p "${SHARE_DIR}/vishwa_tests/lib/pocl"
+        find /usr/share/pocl -name "kernel-*.bc" -exec cp {} \
+            "${SHARE_DIR}/vishwa_tests/share/pocl/" \; 2>/dev/null || true
+        cp -rL /usr/share/pocl/include/. \
+            "${SHARE_DIR}/vishwa_tests/share/pocl/include/" 2>/dev/null || true
+        find /usr/lib64/pocl -name "libpocl-devices-*.so" -exec cp {} \
+            "${SHARE_DIR}/vishwa_tests/lib/pocl/" \; 2>/dev/null || true
+        # Guest linker wrapper (for LLVM JIT inside POCL)
+        cp -L /usr/bin/ld "${SHARE_DIR}/vishwa_tests/bin/ld.real" 2>/dev/null || true
+        cat > "${SHARE_DIR}/vishwa_tests/bin/ld" <<'EOF'
+#!/bin/sh
+exec /mnt/share/vishwa_tests/lib/ld-linux-x86-64.so.2 \
+  --library-path /mnt/share/vishwa_tests/lib \
+  /mnt/share/vishwa_tests/bin/ld.real "$@"
+EOF
+        chmod +x "${SHARE_DIR}/vishwa_tests/bin/ld"
+        for dep in $(find /usr/lib64 -maxdepth 1 -name "libbfd-*.so" \
+                                                  -o -name "libctf.so.0" \
+                                                  -o -name "libjansson.so.4" \
+                                                  -o -name "libsframe.so.2" \
+                     2>/dev/null); do
+          cp -L "$dep" "$LIB/$(basename $dep)" 2>/dev/null && \
+            echo "  linker dep: $(basename $dep)"
+        done
+      else
+        echo "WARNING: PoCL not found — OpenCL tests will fail inside guest."
+        echo "Install with: sudo dnf install -y pocl"
+      fi
+
+    # ── 10. Final share layout ─────────────────────────────────────────────
+    - echo "=== Share deployment complete ==="
+    - ls -la "${SHARE_DIR}/"
+    - echo "=== Per-test lib/ contents ==="
+    - find "${SHARE_DIR}/vishwa_tests" -type d -name lib | while read d; do
+        echo "  $d ($(ls $d | wc -l) files)";
+      done
+
+  artifacts:
+    name: "share-layout-${CI_COMMIT_SHORT_SHA}"
+    paths:
+      - driver-source/gpgpu_driver/gpgpu_pcie_ep_driver.ko
+    expire_in: 1 day
+
+
+# =============================================================================
+# Stage 3 — TEST
+# Start the orchestrator, run the CI impact analyzer to determine which tests
+# to run, wait for completion, then report results.
+# =============================================================================
+
+orchestrate-validation:
+  stage: test
+  tags:
+    - dvf-runner          # runner MUST have /dev/kvm and the QEMU binary
+  needs:
+    - build-orchestrator
+    - deploy-share
+  script:
+    # ── 1. Start the orchestrator (memory storage for CI, no postgres needed)
+    - echo "=== Starting DVF Orchestrator (memory storage) ==="
+    - |
+      ./go-orchestrator/orchestrator \
+        --config "$DVF_CONFIG_DIR" \
+        --storage memory \
+        > orchestrator.log 2>&1 &
+      ORCHESTRATOR_PID=$!
+      echo "Orchestrator PID: $ORCHESTRATOR_PID"
+
+    # ── 2. Wait until the REST API is healthy ─────────────────────────────
+    - echo "=== Waiting for orchestrator API ==="
+    - |
+      MAX_WAIT=60
+      for i in $(seq 1 $MAX_WAIT); do
+        if curl -sf "${DVF_API_URL}/healthz" > /dev/null; then
+          echo "Orchestrator ready after ${i}s"
           break
+        fi
+        if [ "$i" -eq "$MAX_WAIT" ]; then
+          echo "ERROR: Orchestrator did not become ready after ${MAX_WAIT}s"
+          echo "--- orchestrator.log ---"
+          cat orchestrator.log
+          exit 1
         fi
         sleep 1
       done
-      
-    # 3. Check if the orchestrator process is still running
+
+    # ── 3. Verify the orchestrator process is still alive ────────────────
     - |
       if ! kill -0 $ORCHESTRATOR_PID 2>/dev/null; then
-        echo "Orchestrator failed to start. Logs:"
+        echo "ERROR: Orchestrator process died unexpectedly."
         cat orchestrator.log
         exit 1
       fi
-      
-    # 4. Run the CI impact analyzer (without dry-run to execute tests)
-    - echo "Running DVF CI Impact Analyzer..."
+
+    # ── 4. Run the CI impact analyzer ─────────────────────────────────────
+    # The analyzer diffs git changes, maps changed files to test suites,
+    # submits test-run requests to the orchestrator, and waits for results.
+    - echo "=== Running DVF CI Impact Analyzer ==="
     - python3 scripts/ci_impact_analyzer.py
-    - ANALYZER_EXIT_CODE=$?
-    
-    # 5. Clean up the orchestrator service
-    - kill $ORCHESTRATOR_PID || true
-    - exit $ANALYZER_EXIT_CODE
+    - ANALYZER_EXIT=$?
+
+    # ── 5. Collect results and log ────────────────────────────────────────
+    - |
+      echo "=== Test run summary ==="
+      curl -sf "${DVF_API_URL}/api/v1/test-runs" 2>/dev/null | \
+        python3 -m json.tool 2>/dev/null || true
+
+    # ── 6. Always stop the orchestrator ───────────────────────────────────
+    - |
+      echo "=== Stopping orchestrator (PID ${ORCHESTRATOR_PID}) ==="
+      kill $ORCHESTRATOR_PID 2>/dev/null || true
+      wait $ORCHESTRATOR_PID 2>/dev/null || true
+
+    - exit $ANALYZER_EXIT
+
+  after_script:
+    # Emergency cleanup: kill any QEMU processes or orphaned orchestrator
+    - pkill -f "qemu-system-x86_64.*dvf" 2>/dev/null || true
+    - pkill -f "orchestrator.*--storage" 2>/dev/null || true
+
+  artifacts:
+    name: "test-results-${CI_COMMIT_SHORT_SHA}"
+    when: always
+    paths:
+      - orchestrator.log
+      - /tmp/dvf/qemu-*.log
+    expire_in: 7 days
