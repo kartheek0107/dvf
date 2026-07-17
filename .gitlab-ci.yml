@@ -343,12 +343,8 @@ deploy-share:
             "${SHARE_DIR}/vishwa_tests/lib/pocl/" \; 2>/dev/null || true
         # Guest linker wrapper (for LLVM JIT inside POCL)
         cp -L /usr/bin/ld "${SHARE_DIR}/vishwa_tests/bin/ld.real" 2>/dev/null || true
-        cat > "${SHARE_DIR}/vishwa_tests/bin/ld" <<'EOF'
-#!/bin/sh
-exec /mnt/share/vishwa_tests/lib/ld-linux-x86-64.so.2 \
-  --library-path /mnt/share/vishwa_tests/lib \
-  /mnt/share/vishwa_tests/bin/ld.real "$@"
-EOF
+        printf '#!/bin/sh\nexec /mnt/share/vishwa_tests/lib/ld-linux-x86-64.so.2 \\\n  --library-path /mnt/share/vishwa_tests/lib \\\n  /mnt/share/vishwa_tests/bin/ld.real "$@"\n' \
+          > "${SHARE_DIR}/vishwa_tests/bin/ld"
         chmod +x "${SHARE_DIR}/vishwa_tests/bin/ld"
         for dep in $(find /usr/lib64 -maxdepth 1 -name "libbfd-*.so" \
                                                   -o -name "libctf.so.0" \
