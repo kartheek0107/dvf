@@ -169,6 +169,7 @@ deploy-share:
   needs:
     - build-orchestrator
     - build-driver
+    - build-test-binaries
   script:
     # ── 0. Ensure share directory tree exists ──────────────────────────────
     - echo "=== Preparing 9p share at ${SHARE_DIR} ==="
@@ -184,6 +185,7 @@ deploy-share:
       mkdir -p "${SHARE_DIR}/vishwa_tests/opencl/sgemm"
       mkdir -p "${SHARE_DIR}/vishwa_tests/bin"
       mkdir -p "${SHARE_DIR}/python-agent"
+      mkdir -p "${SHARE_DIR}/dvf_tests"
 
     # ── 1. Deploy the GPGPU driver ─────────────────────────────────────────
     - echo "=== Deploying GPGPU driver ==="
@@ -194,6 +196,17 @@ deploy-share:
     - cp -r python-agent/. "${SHARE_DIR}/python-agent/"
     - cp python-agent/agent/start_agent.sh "${SHARE_DIR}/start_agent.sh"
     - chmod +x "${SHARE_DIR}/start_agent.sh"
+
+    # ── 2b. Build and install DVF C test binaries ─────────────────────────
+    - echo "=== Deploying DVF C test binaries ==="
+    - make -C c-test-binaries install SHARE_DIR="${SHARE_DIR}"
+    - |
+      chmod +x scripts/bundle_libs.sh
+      find "${SHARE_DIR}/dvf_tests" -type f -executable | while read binary; do
+        echo "  Bundling: $binary"
+        bash scripts/bundle_libs.sh "$binary" "$(dirname $binary)/lib" 2>&1 | \
+          grep -E "^  (COPY|WARN|SKIP|===|Done)" | sed 's/^/    /' || true
+      done
 
     # ── 3. Build the Vishwa runtime and tests (from CDAC source) ──────────
     - echo "=== Building Vishwa runtime and tests ==="
@@ -454,11 +467,15 @@ orchestrate-validation:
     # Emergency cleanup: kill any QEMU processes or orphaned orchestrator
     - pkill -f "qemu-system-x86_64.*dvf" 2>/dev/null || true
     - pkill -f "orchestrator.*--storage" 2>/dev/null || true
+    # Copy QEMU logs into the project dir so GitLab can upload them as artifacts
+    # (/tmp/dvf/ is outside the project dir and triggers a WARNING that silently
+    # prevents the logs from being uploaded)
+    - mkdir -p logs/qemu && cp /tmp/dvf/qemu-*.log logs/qemu/ 2>/dev/null || true
 
   artifacts:
     name: "test-results-${CI_COMMIT_SHORT_SHA}"
     when: always
     paths:
       - orchestrator.log
-      - /tmp/dvf/qemu-*.log
+      - logs/qemu/
     expire_in: 7 days

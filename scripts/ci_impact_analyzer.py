@@ -48,6 +48,21 @@ def load_device_registry():
     with open(REGISTRY_PATH) as f:
         return json.load(f)
 
+def qemu_devices(registry):
+    """Return only devices that support QEMU emulation.
+
+    Devices with target_modes that do NOT include "qemu" (e.g. pure FPGA
+    hardware devices) cannot be run in CI — scheduling them produces
+    CANCELLED results that fail the job and pollute the summary.
+    Devices with no target_modes set are assumed to support QEMU (backward compat).
+    """
+    result = []
+    for dev in registry.get("devices", []):
+        modes = dev.get("target_modes", [])
+        if not modes or "qemu" in modes:
+            result.append(dev)
+    return result
+
 def load_sidecar(category, name):
     """Load JSON sidecar for a test."""
     path = os.path.join(C_TESTS_DIR, category, f"{name}.json")
@@ -91,7 +106,7 @@ def get_affected_tests(changed_files, registry, sidecars):
             parts = file.split("/")
             if len(parts) > 1:
                 driver_dir = parts[1]
-                for dev in registry.get("devices", []):
+                for dev in qemu_devices(registry):
                     if dev.get("driver_module") == driver_dir or dev.get("id") in driver_dir:
                         print(f"Driver changed: {file}. Scheduling tests for device: {dev['id']}")
                         affected_devices.add(dev["id"])
@@ -108,16 +123,16 @@ def get_affected_tests(changed_files, registry, sidecars):
                 key = f"{category}/{test_name}"
                 if key in sidecars:
                     print(f"Test case changed: {file}. Scheduling {key}")
-                    # Find all devices supporting this test or capabilities
+                    # Find all QEMU-capable devices supporting this test or capabilities
                     test_caps = set(sidecars[key].get("capabilities", []))
-                    for dev in registry.get("devices", []):
+                    for dev in qemu_devices(registry):
                         # Match by capability overlap
                         dev_caps = set(dev.get("capabilities", []))
                         if test_caps.issubset(dev_caps) or key in dev.get("test_suites", []):
                             affected_tests.add((dev["id"], key))
 
     if run_all:
-        for dev in registry.get("devices", []):
+        for dev in qemu_devices(registry):
             for suite in dev.get("test_suites", []):
                 affected_tests.add((dev["id"], suite))
 
@@ -234,9 +249,9 @@ def main():
 
         # If no files changed (e.g. manual CI trigger), default to all tests
         if not changed_files:
-            print("No files changed. Scheduling all tests.")
+            print("No files changed. Scheduling all QEMU-capable tests.")
             affected = set()
-            for dev in registry.get("devices", []):
+            for dev in qemu_devices(registry):
                 for suite in dev.get("test_suites", []):
                     affected.add((dev["id"], suite))
         else:

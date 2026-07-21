@@ -25,7 +25,7 @@
 #include "device_config.h"
 
 /* Legacy GPGPU constants — kept for backward compatibility */
-#define GPGPU_DEVICE_PATH  "/dev/gpgpu"
+#define GPGPU_DEVICE_PATH  "/dev/gp_gpu"
 #define GPGPU_REG_COUNT    256
 #define GPGPU_REG_SIZE     4        /* bytes per register */
 #define GPGPU_BAR_SIZE     1024     /* total BAR0 addressable bytes (256 * 4) */

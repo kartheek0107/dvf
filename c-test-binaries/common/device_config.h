@@ -19,13 +19,13 @@
 #include <string.h>
 
 /* Defaults matching the GPGPU QEMU device */
-#define DVF_DEFAULT_DEVICE_PATH  "/dev/gpgpu"
+#define DVF_DEFAULT_DEVICE_PATH  "/dev/gp_gpu"
 #define DVF_DEFAULT_REG_COUNT    256
 #define DVF_DEFAULT_REG_SIZE     4
 #define DVF_DEFAULT_BAR_SIZE     1024
 
 typedef struct {
-    char device_path[256];  /* e.g., "/dev/gpgpu" or "/dev/fpga0" */
+    char device_path[256];  /* e.g., "/dev/gp_gpu" or "/dev/fpga0" */
     int  reg_count;         /* Number of registers (e.g., 256) */
     int  reg_size;          /* Bytes per register (e.g., 4) */
     int  bar_size;          /* Total BAR0 addressable bytes (e.g., 1024) */

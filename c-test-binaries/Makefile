@@ -27,7 +27,8 @@ TESTS := \
 	concurrency/test_concurrent_rw \
 	stress_performance/test_throughput \
 	error_injection/test_boundaries \
-	interrupt_handling/test_irq_basic
+	interrupt_handling/test_irq_basic \
+	abctest/test
 
 # Default share directory (override with: make install SHARE_DIR=...)
 SHARE_DIR ?= /home/kartheekbudime/qemu-rootfs/share
@@ -49,7 +50,7 @@ clean:
 	@rm -f $(TESTS)
 	@echo "Done."
 
-# Copy all binaries to the 9p shared folder for the guest VM
+# Copy all binaries (and their bundled lib/ dirs) to the 9p shared folder
 install: all
 	@echo "Installing test binaries to $(SHARE_DIR)/dvf_tests/"
 	@mkdir -p $(SHARE_DIR)/dvf_tests
@@ -57,6 +58,9 @@ install: all
 		dir=$$(dirname $$t); \
 		mkdir -p $(SHARE_DIR)/dvf_tests/$$dir; \
 		cp $$t $(SHARE_DIR)/dvf_tests/$$t; \
+		if [ -d $$dir/lib ]; then \
+			cp -r $$dir/lib $(SHARE_DIR)/dvf_tests/$$dir/; \
+		fi; \
 	done
 	@echo "Installed $(words $(TESTS)) binaries."
 

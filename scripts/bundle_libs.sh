@@ -48,6 +48,37 @@ echo ""
 
 mkdir -p "$LIB_DIR"
 
+# ── System library blocklist ───────────────────────────────────────────────────
+# These libraries are tightly coupled to the dynamic linker (ld-linux) on the
+# TARGET machine. Bundling them from the host causes GLIBC_PRIVATE symbol
+# mismatches at runtime when the host and guest have different glibc versions
+# (e.g. Fedora host → Alpine or Debian guest).
+#
+# Rule: only bundle NON-SYSTEM libs (e.g. libopenblas, libvishwa, libgpurt).
+# Let the guest OS supply its own glibc, libm, libpthread, and libgcc_s.
+SYSTEM_LIBS=(
+    "libc.so"
+    "libm.so"
+    "libpthread.so"
+    "libgcc_s.so"
+    "libdl.so"
+    "librt.so"
+    "libresolv.so"
+    "libnss"
+    "libutil.so"
+    "libcrypt.so"
+)
+
+is_system_lib() {
+    local name="$1"
+    for pat in "${SYSTEM_LIBS[@]}"; do
+        if [[ "$name" == ${pat}* ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 # Run ldd and parse output
 BUNDLED=0
 SKIPPED=0
@@ -81,6 +112,13 @@ while IFS= read -r line; do
 
     soname="$(basename "$sopath")"
     dest="$LIB_DIR/$soname"
+
+    # Skip system libraries — they must come from the guest OS, not the host
+    if is_system_lib "$soname"; then
+        echo "  SYSLIB: $soname — skipped (must come from guest OS, not host)"
+        ((SKIPPED++)) || true
+        continue
+    fi
 
     if [[ -e "$dest" ]]; then
         echo "  SKIP : $soname (already in lib/)"

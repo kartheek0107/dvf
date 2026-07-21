@@ -1,0 +1,13 @@
+{
+  "id": "abctest/test",
+  "name": "ABC Concurrency Test",
+  "description": "Multi-threaded concurrency register tests",
+  "timeout_seconds": 150,
+  "tests": [
+    {
+      "binary": "abctest/test",
+      "description": "Writer/reader race and multi-register concurrent write tests",
+      "timeout_seconds": 120
+    }
+  ]
+}

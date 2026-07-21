@@ -1,0 +1,12 @@
+{
+    "name": "abc",
+    "category": "abctest",
+    "capabilities": [
+        "mmio",
+        "concurrency"
+    ],
+    "dependencies": [
+        ""
+    ],
+    "timeout_seconds": 150
+}

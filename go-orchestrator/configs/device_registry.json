@@ -28,7 +28,8 @@
         "vishwa/opencl/ai_predict",
         "vishwa/opencl/blur",
         "vishwa/opencl/gray",
-        "vishwa/opencl/sgemm"
+        "vishwa/opencl/sgemm",
+        "abctest/test"
       ]
     },
     {

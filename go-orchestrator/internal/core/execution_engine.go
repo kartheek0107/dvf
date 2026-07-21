@@ -1033,6 +1033,14 @@ func (e *ExecutionEngine) runWorkflow(ctx context.Context, run *TestRun, device 
 						},
 					}
 
+					// Always inject DVF_DEVICE_PATH from the device registry so
+					// every test binary (DVF C tests and Vishwa) gets the correct
+					// device node without relying on any hardcoded default in C headers.
+					baseEnv := map[string]interface{}{
+						"DVF_DEVICE_PATH": device.DeviceNode,
+					}
+					stepCmd.Parameters["env"] = baseEnv
+
 					if len(def.Args) > 0 {
 						stepCmd.Parameters["args"] = def.Args
 					}
@@ -1055,7 +1063,11 @@ func (e *ExecutionEngine) runWorkflow(ctx context.Context, run *TestRun, device 
 						}
 						binaryDir := testDir + "/" + suitePath
 
-						env := make(map[string]interface{}, len(device.VishwaEnv))
+						// Merge Vishwa env on top of the base env (Vishwa vars take priority)
+						env := make(map[string]interface{}, len(baseEnv)+len(device.VishwaEnv))
+						for k, v := range baseEnv {
+							env[k] = v
+						}
 						for k, v := range device.VishwaEnv {
 							env[k] = v
 						}

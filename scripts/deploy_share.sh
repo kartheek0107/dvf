@@ -58,7 +58,7 @@ echo -e "${CYAN}  Vishwa : ${VISHWA_CODE_DIR}${RESET}"
 echo -e "${CYAN}======================================================${RESET}"
 
 # ── Step 0: Create directory tree ─────────────────────────────────────────────
-step "0/9  Preparing share directory tree"
+step "0/10 Preparing share directory tree"
 mkdir -p "${SHARE_DIR}"
 mkdir -p "${SHARE_DIR}/vishwa_tests/lib/OpenCL/vendors"
 for suite in regression/vecaddx opencl/vecadd opencl/vecadd2 \
@@ -67,10 +67,11 @@ for suite in regression/vecaddx opencl/vecadd opencl/vecadd2 \
 done
 mkdir -p "${SHARE_DIR}/vishwa_tests/bin"
 mkdir -p "${SHARE_DIR}/python-agent"
+mkdir -p "${SHARE_DIR}/dvf_tests"
 ok "Directory tree ready"
 
 # ── Step 1: Build the GPGPU driver ────────────────────────────────────────────
-step "1/9  Building GPGPU driver"
+step "1/10 Building GPGPU driver"
 if $SKIP_DRIVER_BUILD; then
   warn "Skipping driver build (--skip-driver-build)"
 else
@@ -83,12 +84,12 @@ else
 fi
 
 # ── Step 2: Deploy driver .ko ─────────────────────────────────────────────────
-step "2/9  Deploying driver .ko"
+step "2/10 Deploying driver .ko"
 cp "${DVF_ROOT}/driver-source/gpgpu_driver/gpgpu_pcie_ep_driver.ko" "${SHARE_DIR}/"
 ok "Deployed gpgpu_pcie_ep_driver.ko"
 
 # ── Step 3: Deploy the DVF agent ──────────────────────────────────────────────
-step "3/9  Deploying DVF agent"
+step "3/10 Deploying DVF agent"
 # Clean up only files we own (root-owned __pycache__ from VM run are skipped)
 find "${SHARE_DIR}/python-agent" -maxdepth 5 \
   \( -name '*.pyc' -o -name '__pycache__' \) \
@@ -102,8 +103,48 @@ cp "${DVF_ROOT}/python-agent/agent/start_agent.sh" "${SHARE_DIR}/start_agent.sh"
 chmod +x "${SHARE_DIR}/start_agent.sh"
 ok "Agent deployed"
 
-# ── Step 4: Build Vishwa ──────────────────────────────────────────────────────
-step "4/9  Building Vishwa runtime and tests"
+# ── Step 4: Build and deploy DVF C test binaries ──────────────────────────────
+step "4/10 Building and deploying DVF C test binaries"
+C_TESTS_DIR="${DVF_ROOT}/c-test-binaries"
+
+echo "  Building C test binaries (make -j4)..."
+make -j4 -C "${C_TESTS_DIR}" 2>&1 | tail -5
+
+# Wipe destination clean before install so stale system libs (e.g. libc.so.6
+# bundled before the system-lib blocklist existed) never persist across deploys.
+echo "  Cleaning stale dvf_tests/ before install..."
+rm -rf "${SHARE_DIR}/dvf_tests"
+mkdir -p "${SHARE_DIR}/dvf_tests"
+
+echo "  Installing binaries to ${SHARE_DIR}/dvf_tests/..."
+make -C "${C_TESTS_DIR}" install SHARE_DIR="${SHARE_DIR}" 2>&1 | tail -5
+
+# Purge any system libs that snuck in via committed source lib/ dirs.
+# These must always come from the guest OS — never from the host.
+echo "  Purging system libs from dvf_tests lib/ dirs..."
+for pat in "libc.so*" "libm.so*" "libpthread.so*" "libgcc_s.so*" \
+           "libdl.so*" "librt.so*" "libresolv.so*" "libcrypt.so*"; do
+  find "${SHARE_DIR}/dvf_tests" -name "$pat" -delete 2>/dev/null || true
+done
+
+# Bundle .so dependencies for each installed C test binary.
+# Exclude files inside lib/ dirs (they are already bundled .so files, not test binaries).
+# Also exclude .sh scripts since bundle_libs only makes sense for ELF binaries.
+echo "  Bundling .so dependencies for C test binaries..."
+find "${SHARE_DIR}/dvf_tests" -type f -executable \
+  -not -path "*/lib/*" \
+  -not -name "*.sh" | while read binary; do
+  rel=$(realpath --relative-to="${SHARE_DIR}/dvf_tests" "$binary")
+  echo "  → dvf_tests/${rel}"
+  bash "${DVF_ROOT}/scripts/bundle_libs.sh" \
+    "$binary" "$(dirname $binary)/lib" 2>&1 | \
+    grep -E "^  (COPY|WARN|SKIP|===|Done)" | sed 's/^/    /' || true
+done
+
+ok "C test binaries deployed to ${SHARE_DIR}/dvf_tests/"
+
+# ── Step 5: Build Vishwa ──────────────────────────────────────────────────────
+step "5/10 Building Vishwa runtime and tests"
 if $SKIP_VISHWA_BUILD; then
   warn "Skipping Vishwa build (--skip-vishwa-build)"
 else
@@ -117,7 +158,7 @@ else
 fi
 
 # ── Step 5: Deploy Vishwa libraries and binaries ──────────────────────────────
-step "5/9  Deploying Vishwa libraries and test binaries"
+step "6/10 Deploying Vishwa libraries and test binaries"
 VISHWA_BUILD="${VISHWA_CODE_DIR}/vishwa_hw_testing_env/build"
 cp_if() {
   local src="$1" dst="$2"
@@ -153,7 +194,7 @@ cp_if "${TESTS_SRC}/opencl/ai_predict/bias.txt"        "${SHARE_DIR}/vishwa_test
 cp_if "${TESTS_SRC}/opencl/ai_predict/weights.txt"     "${SHARE_DIR}/vishwa_tests/opencl/ai_predict/"
 
 # ── Step 6: Deploy host linker + standard libs ────────────────────────────────
-step "6/9  Deploying host dynamic linker and standard libraries"
+step "7/10 Deploying host dynamic linker and standard libraries"
 LIB="${SHARE_DIR}/vishwa_tests/lib"
 cp_l() {
   local src="$1" name="$2"
@@ -168,13 +209,15 @@ cp_l /lib64/libgcc_s.so.1         libgcc_s.so.1
 cp_l /lib64/libstdc++.so.6        libstdc++.so.6
 
 # ── Step 7: Strategy 1 — Bundle per-test lib/ directories ────────────────────
-step "7/9  Bundling per-test .so dependencies (Strategy 1)"
+step "8/10 Bundling per-test .so dependencies (Strategy 1)"
 bundle_test() {
   local binary="$1"
   if [ -f "$binary" ]; then
-    echo "  → $(basename $(dirname $binary))/$(basename $binary)"
+    echo "  \u2192 $(basename $(dirname $binary))/$(basename $binary)"
+    # Suppress WARN for libvishwa.so and libgpurt.so — these are Vishwa-internal
+    # libs not present on the host; step 7b copies them explicitly from the share.
     bash "${DVF_ROOT}/scripts/bundle_libs.sh" "$binary" "$(dirname $binary)/lib" 2>&1 | \
-      grep -E "^  (COPY|WARN|===|Done)" | sed 's/^/    /'
+      grep -E "^  (COPY|===|Done)" | sed 's/^/    /'
   fi
 }
 bundle_test "${SHARE_DIR}/vishwa_tests/regression/vecaddx/vecaddx"
@@ -225,7 +268,7 @@ for test_dir in \
 done
 
 # ── Step 8: OpenCL ICD loader + PoCL ─────────────────────────────────────────
-step "8/9  Deploying OpenCL / PoCL runtime"
+step "9/10 Deploying OpenCL / PoCL runtime"
 if [ -f /usr/lib64/libOpenCL.so.1.0.0 ]; then
   cp -L /usr/lib64/libOpenCL.so.1.0.0 "${LIB}/libOpenCL.so.1.0.0"
   cp -L /usr/lib64/libOpenCL.so.1.0.0 "${LIB}/libOpenCL.so.1"
@@ -247,13 +290,13 @@ else
 fi
 
 # ── Step 9: Summary ───────────────────────────────────────────────────────────
-step "9/9  Deployment summary"
+step "10/10 Deployment summary"
 echo ""
 echo "  Share root:"
 ls -lh "${SHARE_DIR}/" | tail -10
 echo ""
 echo "  Per-test lib/ directories:"
-find "${SHARE_DIR}/vishwa_tests" -type d -name lib | while read d; do
+find "${SHARE_DIR}/vishwa_tests" "${SHARE_DIR}/dvf_tests" -type d -name lib 2>/dev/null | while read d; do
   count=$(ls "$d" 2>/dev/null | wc -l)
   echo "    $d  (${count} files)"
 done
