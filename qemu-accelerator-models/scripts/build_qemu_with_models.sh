@@ -53,9 +53,12 @@ else
     git clone --depth=1 --branch "$QEMU_VERSION" \
         https://gitlab.com/qemu-project/qemu.git \
         "$QEMU_CLONE_DIR"
-    cd "$QEMU_CLONE_DIR"
-    git submodule update --init --recursive --depth=1
-    cd - > /dev/null
+    # NOTE: We skip `git submodule update --init --recursive` deliberately.
+    # The roms/ submodules are pre-built firmware for non-x86 architectures
+    # (edk2, openbios, u-boot, etc.) — they are NOT needed for
+    # --target-list=x86_64-softmmu.  QEMU's ./configure fetches the few
+    # subprojects it actually needs (keycodemapdb, berkeley-softfloat-3)
+    # from its own meson subprojects/ directory.
 fi
 
 # ── Step 2: Inject DVF device models ─────────────────────────────────────────
