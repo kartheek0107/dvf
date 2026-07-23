@@ -93,17 +93,39 @@ cd ~/VirtualMachines/qemu-src
 git checkout v8.2.0          # use the version your team standardised on
 ```
 
-### 1b. Copy the device model into the QEMU source tree
+### 1b. Inject the device models into the QEMU source tree
+
+The repo ships proper `meson.build` files inside `qemu-accelerator-models/` so
+you do **not** need to manually edit QEMU's build files.  The entire `hw/misc/`
+subdirectory (sources + `meson.build`) is copied as a self-contained unit:
 
 ```bash
 # From the driver-validation-suite repo root:
-cp -r qemu-accelerator-models/hw/misc/gp_gpu.c \
-      ~/VirtualMachines/qemu-src/hw/misc/
 
-# Register it in QEMU's build system:
-echo "softmmu_ss.add(files('gp_gpu.c'))" \
-  >> ~/VirtualMachines/qemu-src/hw/misc/meson.build
+# Copy the whole DVF device model directory into the QEMU source tree.
+# This brings both the .c sources AND the meson.build fragment.
+cp -r qemu-accelerator-models/hw/misc \
+      ~/VirtualMachines/qemu-src/hw/misc-dvf
+
+# Wire it into QEMU's hw-level Meson graph (one line, done once):
+echo "subdir('misc-dvf')" \
+  >> ~/VirtualMachines/qemu-src/hw/meson.build
 ```
+
+> **Developer shortcut (symlink instead of copy):**  
+> If you are actively editing device model source files, use a symlink so changes
+> in this repo are immediately visible to the QEMU build without re-copying:
+>
+> ```bash
+> ln -s "$(realpath qemu-accelerator-models/hw/misc)" \
+>        ~/VirtualMachines/qemu-src/hw/misc-dvf
+> echo "subdir('misc-dvf')" >> ~/VirtualMachines/qemu-src/hw/meson.build
+> ```
+
+> **Adding a new device model later:**  
+> Add `<name>.c` to `qemu-accelerator-models/hw/misc/` and add one line to
+> `qemu-accelerator-models/hw/misc/meson.build` — no changes to QEMU's own
+> build files are ever needed again.
 
 ### 1c. Configure and compile
 
@@ -351,7 +373,8 @@ QEMU-backed pipeline — with no further setup required on their part.
 | What changed | What to redo |
 |---|---|
 | `python-agent/` code changed significantly | Rebuild rootfs: `cd guest-os && make build`, then `cp output/dvf-guest.ext4 ~/qemu-rootfs/rootfs.ext4` |
-| `qemu-accelerator-models/` device model changed | Recompile QEMU (Step 1) |
+| `qemu-accelerator-models/` device model `.c` changed | Recompile QEMU: `cd ~/VirtualMachines/qemu-src && make -j$(nproc) && make install` |
+| New device model added to `qemu-accelerator-models/hw/misc/` | Add `files('<name>.c')` to `hw/misc/meson.build` in this repo, then recompile QEMU (Step 1c) |
 | Kernel config change needed | Recompile kernel (Step 2) |
 | New test binary added to repo | Nothing — CI `deploy-share` stage handles it automatically |
 | New `.so` dependency in a test | Nothing — `bundle_libs.sh` in `deploy-share` handles it automatically |

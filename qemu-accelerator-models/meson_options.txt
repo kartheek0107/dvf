@@ -1,0 +1,12 @@
+option('qemu_version',
+  type        : 'string',
+  value       : 'v8.2.0',
+  description : 'QEMU git tag to clone and build (e.g. v8.2.0, v9.0.0)',
+)
+
+option('qemu_source_dir',
+  type        : 'string',
+  value       : '',
+  description : 'Path to a pre-cloned QEMU source tree. If set, skips git clone. '
+              + 'Useful on offline machines or to reuse an existing checkout.',
+)
