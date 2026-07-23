@@ -408,26 +408,22 @@ orchestrate-validation:
     - deploy-share
   script:
     # ── 0. Ensure QEMU binary is in place ────────────────────────────────
-    # builds/ is not committed — copy the pre-built binary from the runner's
-    # known location into CI_PROJECT_DIR so global_config.json (DVF_ROOT) finds it.
-    - echo "=== Setting up QEMU binary ==="
+    # If the DVF custom QEMU binary is not present in builds/qemu/, compile it using
+    # our modular qemu-accelerator-models build script.
+    - echo "=== Setting up DVF QEMU binary ==="
     - |
-      QEMU_DST="${CI_PROJECT_DIR}/builds/qemu"
-      QEMU_BIN="${QEMU_DST}/qemu-system-x86_64"
-      mkdir -p "$QEMU_DST"
+      QEMU_BIN="${CI_PROJECT_DIR}/builds/qemu/qemu-system-x86_64"
       if [ ! -f "$QEMU_BIN" ]; then
-        if [ -f "$HOME/VirtualMachines/qemu_bin/bin/qemu-system-x86_64" ]; then
-          cp "$HOME/VirtualMachines/qemu_bin/bin/qemu-system-x86_64" "$QEMU_BIN"
-          chmod +x "$QEMU_BIN"
-          echo "Copied pre-built QEMU binary from ~/VirtualMachines/qemu_bin/"
-        else
-          echo "ERROR: No QEMU binary found. Run build_qemu_with_models.sh first."
-          exit 1
-        fi
+        echo "QEMU binary not found. Running DVF QEMU build workflow..."
+        bash qemu-accelerator-models/scripts/build_qemu_with_models.sh \
+          "${CI_PROJECT_DIR}/qemu-accelerator-models" \
+          "${CI_PROJECT_DIR}/builds/qemu-build" \
+          "v8.2.0" \
+          ""
       else
-        echo "QEMU binary already in place: $QEMU_BIN"
+        echo "QEMU binary ready: $QEMU_BIN"
       fi
-      "$QEMU_BIN" -device gp_gpu,help 2>&1 | head -2
+      "$QEMU_BIN" -device gp_gpu,help 2>&1 | head -5
 
     # ── 1. Cleanup any stale processes ────────────────────────────────────
     - pkill -f "qemu-system-x86_64.*dvf" 2>/dev/null || true
