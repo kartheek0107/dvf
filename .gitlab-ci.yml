@@ -16,8 +16,9 @@
 # QEMU / KVM requirements:
 #   The CI runner executing the "test" stage MUST:
 #     • Have /dev/kvm available (nested virtualisation or bare-metal runner)
-#     • Have qemu-system-x86_64 ≥ 7.x with the gp_gpu device model compiled in
-#     • Have the QEMU binaries at $HOME/VirtualMachines/qemu_bin/bin/
+#     • Have qemu-system-x86_64 with the gp_gpu device model compiled in.
+#       The binary is built by the repo itself — see qemu-accelerator-models/.
+#       It lives at $DVF_ROOT/builds/qemu/qemu-system-x86_64 after first build.
 #     • Have the Linux bzImage at $HOME/VirtualMachines/linux/arch/x86/boot/bzImage
 #     • Have the rootfs at $HOME/qemu-rootfs/rootfs.ext4
 #   In GitLab, set privileged = true in the runner's config.toml and pass
@@ -44,6 +45,10 @@ variables:
   # The real GPGPU driver Makefile defaults to $HOME/VirtualMachines/linux.
   # This variable lets you override it from the GitLab CI settings.
   KERNEL_BUILD_DIR: "/home/kartheekbudime/VirtualMachines/linux"
+
+  # ── DVF repo root (used by global_config.json to resolve binary_path) ─────
+  # Set to the checked-out project directory on the runner.
+  DVF_ROOT: "$CI_PROJECT_DIR"
 
   # ── Git diff base for impact analysis ───────────────────────────────────────
   GIT_DEPTH: "0"   # fetch full history so CI can diff against any ancestor
@@ -133,7 +138,7 @@ build-driver:
 
 
 # ---------------------------------------------------------------------------
-# 1d. Build DVF C test binaries (compiled with -rpath='$ORIGIN/lib')
+# 1d. Build DVF C/C++ test binaries (compiled with -rpath='$ORIGIN/lib')
 # ---------------------------------------------------------------------------
 build-test-binaries:
   stage: build
