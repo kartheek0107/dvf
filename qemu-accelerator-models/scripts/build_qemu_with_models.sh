@@ -23,7 +23,8 @@
 set -euo pipefail
 
 MODELS_ROOT="$(realpath "${1:?ARG1 (models root) is required}")"
-OUT_DIR="$(realpath "${2:?ARG2 (output dir) is required}")"
+mkdir -p "${2:?ARG2 (output dir) is required}"
+OUT_DIR="$(realpath "$2")"
 QEMU_VERSION="${3:-v8.2.0}"
 QEMU_SRC="${4:-}"
 
