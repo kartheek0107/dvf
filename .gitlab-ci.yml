@@ -34,7 +34,7 @@ stages:
 variables:
   # ── Global paths ────────────────────────────────────────────────────────────
   DVF_API_URL:    "http://localhost:8080"
-  SHARE_DIR:      "/home/kartheekbudime/qemu-rootfs/share"
+  SHARE_DIR:      "$CI_PROJECT_DIR/qemu-rootfs/share"
   DVF_CONFIG_DIR: "go-orchestrator/configs"
 
   # ── CDAC / Vishwa source paths (on the CI runner) ──────────────────────────
