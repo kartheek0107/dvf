@@ -216,16 +216,17 @@ deploy-share:
       done
 
     # ── 3. Build the Vishwa runtime and tests (from CDAC source) ──────────
+    # Non-fatal: Vishwa is an external dependency; the CI runner may not have
+    # write access to the CDAC source tree.  Pre-built artifacts are used if
+    # the build step fails or is skipped.
     - echo "=== Building Vishwa runtime and tests ==="
     - |
       if [ -f "${VISHWA_CODE_DIR}/vishwa_hw_testing_env/vishwa_run.sh" ]; then
         cd "${VISHWA_CODE_DIR}/vishwa_hw_testing_env"
-        bash vishwa_run.sh
+        bash vishwa_run.sh || echo "WARNING: Vishwa build failed (non-fatal) — using pre-built artifacts if available"
         cd "$CI_PROJECT_DIR"
-        echo "Vishwa build complete."
       else
-        echo "WARNING: Vishwa build script not found at ${VISHWA_CODE_DIR}/vishwa_hw_testing_env/vishwa_run.sh"
-        echo "Skipping Vishwa build — using pre-built artifacts in share if present."
+        echo "INFO: Vishwa source not found — skipping (using pre-built artifacts if present)"
       fi
 
     # ── 4. Deploy Vishwa runtime libraries ────────────────────────────────
