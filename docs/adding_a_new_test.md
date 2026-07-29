@@ -246,6 +246,130 @@ git push
 
 ---
 
+## Scenario B2 — Adding a New C++ Test (DVF Framework)
+
+The DVF framework also supports tests written in C++. The same headers, JSON
+sidecar, and `device_registry.json` workflow apply — you only need to use a
+`.cpp` source file and a `g++`-compiled binary.
+
+### Step 1 — Write your test
+
+Create your source file in `c-test-binaries/`:
+
+```
+c-test-binaries/
+└── my_category/
+    ├── my_test.cpp
+    └── my_test.json    ← metadata sidecar (identical format to C tests)
+```
+
+**`my_test.cpp` skeleton:**
+```cpp
+#include "../common/test_framework.h"
+#include "../common/device_helpers.h"
+
+#include <string>       // C++ standard library is available
+#include <vector>
+
+// Test functions must return int (0 = PASS, non-zero = FAIL)
+static int test_my_feature(void)
+{
+    DeviceConfig cfg = dvf_load_config();
+    int fd = dvf_open_device(&cfg, O_RDWR);
+    ASSERT_TRUE(fd >= 0, "Failed to open device");
+
+    // Use C++ freely here
+    std::vector<uint32_t> values = {0xDEAD, 0xBEEF, 0xCAFE};
+    for (int i = 0; i < (int)values.size(); i++) {
+        ASSERT_EQ(dvf_write_reg(fd, i, values[i], &cfg), 0, "write failed");
+        int err = 0;
+        ASSERT_EQ(dvf_read_reg(fd, i, &err, &cfg), values[i], "readback mismatch");
+    }
+
+    close(fd);
+    return 0;   // 0 = PASS
+}
+
+int main(void)
+{
+    TEST_SUITE_BEGIN("my_category/my_test");
+    RUN_TEST(test_my_feature);
+    TEST_SUITE_END();
+}
+```
+
+> **Note:** The `extern "C"` guards are already present in all DVF headers,
+> so the test framework macros (`RUN_TEST`, `ASSERT_EQ`, etc.) work identically
+> in C++ as in C. You do not need to add any linkage annotations yourself.
+
+**`my_test.json` sidecar (identical format to C tests):**
+```json
+{
+    "name": "my_test",
+    "category": "my_category",
+    "capabilities": ["mmio"],
+    "dependencies": [""],
+    "timeout_seconds": 60
+}
+```
+
+### Step 2 — Add to the Makefile
+
+Open `c-test-binaries/Makefile` and add your binary to the `TESTS` list:
+
+```makefile
+TESTS := \
+    read_write/test_register_rw \
+    ...
+    my_category/my_test          ← add this
+```
+
+The Makefile automatically detects `.cpp` sources via the `%: %.cpp` pattern
+rule and compiles with `g++ -std=c++17`. No other Makefile changes are needed.
+
+### Step 3 — Build and bundle
+
+```bash
+cd ~/driver-validation-suite/c-test-binaries
+make my_category/my_test
+
+# Bundle runtime .so dependencies (libstdc++, libpthread, etc.)
+cd ~/driver-validation-suite
+bash scripts/bundle_libs.sh c-test-binaries/my_category/my_test \
+  c-test-binaries/my_category/lib
+```
+
+> **libstdc++ note:** C++ binaries link against `libstdc++.so.6` dynamically.
+> `bundle_libs.sh` detects this automatically via `ldd` and copies it into
+> the `lib/` directory — no manual step needed.
+
+### Step 4 — Register in device_registry.json
+
+```json
+"test_suites": [
+    "smoke/register_rw",
+    "my_category/my_test"     ← add this
+]
+```
+
+### Step 5 — Verify RPATH is set correctly
+
+```bash
+readelf -d c-test-binaries/my_category/my_test | grep -i rpath
+# Expected: Library rpath: [$ORIGIN/lib]
+```
+
+### Step 6 — Commit and push
+
+```bash
+git add c-test-binaries/my_category/
+git add go-orchestrator/configs/device_registry.json
+git commit -m "feat(tests): add my_category/my_test (C++)"
+git push
+```
+
+---
+
 ## Scenario C — Adding a Library to an Existing Test
 
 If you add a new `.so` dependency to an already-registered test:
@@ -280,6 +404,7 @@ bash scripts/deploy_share.sh --skip-vishwa-build --skip-driver-build
 |---|---|---|
 | Add a Vishwa test | `device_registry.json`, `.gitlab-ci.yml` | `deploy_share.sh` → `curl POST /api/v1/test-runs` |
 | Add a C test | New `.c` + `Makefile` + `device_registry.json` | `make` → `bundle_libs.sh` → `deploy_share.sh` |
+| Add a C++ test | New `.cpp` + `Makefile` + `device_registry.json` | `make` → `bundle_libs.sh` → `deploy_share.sh` |
 | Add a library | Nothing (auto-bundled) | `bundle_libs.sh <binary>` |
 | Change driver source | `driver-source/gpgpu_driver/src/` | `make -C driver-source/gpgpu_driver` → `deploy_share.sh` |
 | Rebuild everything | — | `bash scripts/deploy_share.sh` (no --skip flags) |
@@ -290,7 +415,7 @@ bash scripts/deploy_share.sh --skip-vishwa-build --skip-driver-build
 
 ```
 [ ] Binary compiled with -Wl,-rpath,'$ORIGIN/lib'  (automatic via DVF Makefile)
-[ ] libs bundled into ./lib/ via bundle_libs.sh
+[ ] libs bundled into ./lib/ via bundle_libs.sh  (libstdc++.so.6 for C++ tests)
 [ ] Test registered in device_registry.json
 [ ] Test name follows convention: <category>/<test_name>
 [ ] Binary passes manual VM test (scripts/manual_test_vm.sh)

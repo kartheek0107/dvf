@@ -14,6 +14,10 @@
 #ifndef DVF_DEVICE_HELPERS_H
 #define DVF_DEVICE_HELPERS_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdio.h>
 #include <stdint.h>
 #include <unistd.h>
@@ -205,5 +209,9 @@ static inline ssize_t gpgpu_read_raw(int fd, off_t byte_offset,
         return -1;
     return read(fd, buf, len);
 }
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
 
 #endif /* DVF_DEVICE_HELPERS_H */

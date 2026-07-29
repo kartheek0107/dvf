@@ -32,6 +32,10 @@
 #ifndef DVF_TEST_FRAMEWORK_H
 #define DVF_TEST_FRAMEWORK_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -185,5 +189,9 @@ void test_install_signal_handlers(void);
         return 1; \
     } \
 } while(0)
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
 
 #endif /* DVF_TEST_FRAMEWORK_H */

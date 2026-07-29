@@ -80,3 +80,4 @@ docker-compose.override.yml
 *.bak
 *.tmp
 builds/
+gitlab-runner/

@@ -14,6 +14,10 @@
 #ifndef DVF_DEVICE_CONFIG_H
 #define DVF_DEVICE_CONFIG_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -76,5 +80,9 @@ static inline void dvf_print_config(const DeviceConfig *cfg) {
     fprintf(stderr, "[DVF] Device: %s  regs=%d  reg_size=%d  bar=%d bytes\n",
             cfg->device_path, cfg->reg_count, cfg->reg_size, cfg->bar_size);
 }
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
 
 #endif /* DVF_DEVICE_CONFIG_H */
