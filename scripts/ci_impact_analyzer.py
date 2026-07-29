@@ -155,6 +155,8 @@ def build_dag(affected, sidecars):
         meta = sidecars.get(test_key)
         if meta:
             for dep in meta.get("dependencies", []):
+                if not dep or not dep.strip():
+                    continue  # skip empty/blank dependency strings
                 dep_node = (dev_id, dep)
                 # If dependency is not already in queue, we must add it to ensure correctness
                 if dep_node not in adj:
