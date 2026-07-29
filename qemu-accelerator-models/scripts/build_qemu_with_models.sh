@@ -98,6 +98,15 @@ else
     log "hw/pci/pci-dvf already registered (skipping)"
 fi
 
+# ── Step 2b: Ensure Python build deps for QEMU's mkvenv ──────────────────────
+# QEMU 8.x configure uses python/scripts/mkvenv.py which requires `distlib`
+# (and optionally `setuptools`).  Python 3.14+ on Fedora does not ship these
+# by default, causing "found no usable distlib" build failures.
+log "Ensuring Python build dependencies (distlib, setuptools) ..."
+pip3 install --user --quiet distlib setuptools 2>/dev/null || \
+    python3 -m pip install --user --quiet distlib setuptools 2>/dev/null || \
+    log "WARNING: could not install distlib — configure may fail"
+
 # ── Step 3: Configure ────────────────────────────────────────────────────────
 # QEMU 8.x ./configure always writes artefacts into a 'build/' subdir relative
 # to the WORKING DIRECTORY from which it is invoked.  So we:
