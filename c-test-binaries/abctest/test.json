@@ -5,8 +5,6 @@
         "mmio",
         "concurrency"
     ],
-    "dependencies": [
-        ""
-    ],
+    "dependencies": [],
     "timeout_seconds": 150
 }
