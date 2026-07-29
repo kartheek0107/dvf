@@ -437,7 +437,7 @@ orchestrate-validation:
     # Kill anything still holding ports 9080 (REST) or 50051 (gRPC)
     - |
       for PORT in 9080 50051; do
-        PID=$(ss -tlnp "sport = :$PORT" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1)
+        PID=$(ss -tlnp "sport = :$PORT" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1 || true)
         if [ -n "$PID" ]; then
           echo "Killing stale PID $PID on port $PORT"
           kill -9 "$PID" 2>/dev/null || true
