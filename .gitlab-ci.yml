@@ -422,6 +422,10 @@ orchestrate-validation:
           "${CI_PROJECT_DIR}/builds/qemu-build" \
           "v8.2.0" \
           ""
+        # Copy binary to the canonical path the rest of the pipeline expects
+        mkdir -p "${CI_PROJECT_DIR}/builds/qemu"
+        cp "${CI_PROJECT_DIR}/builds/qemu-build/qemu-system-x86_64" "$QEMU_BIN"
+        echo "QEMU binary installed to: $QEMU_BIN"
       else
         echo "QEMU binary ready: $QEMU_BIN"
       fi
