@@ -33,7 +33,7 @@ stages:
 
 variables:
   # ── Global paths ────────────────────────────────────────────────────────────
-  DVF_API_URL:    "http://localhost:8080"
+  DVF_API_URL:    "http://localhost:9080"
   SHARE_DIR:      "$CI_PROJECT_DIR/qemu-rootfs/share"
   DVF_CONFIG_DIR: "go-orchestrator/configs"
 
@@ -434,31 +434,16 @@ orchestrate-validation:
     # ── 1. Cleanup any stale processes ────────────────────────────────────
     - pkill -f "qemu-system-x86_64.*dvf" 2>/dev/null || true
     - pkill -f "orchestrator.*--storage" 2>/dev/null || true
-    # Kill anything still holding ports 8080 (REST) or 50051 (gRPC)
+    # Kill anything still holding ports 9080 (REST) or 50051 (gRPC)
     - |
-      for PORT in 8080 50051; do
-        echo "--- Checking port $PORT ---"
-        ss -tlnp "sport = :$PORT" 2>/dev/null || true
-        # Method 1: fuser (may not be installed)
-        fuser -k "$PORT/tcp" 2>/dev/null || true
-        # Method 2: ss + kill (reliable fallback)
+      for PORT in 9080 50051; do
         PID=$(ss -tlnp "sport = :$PORT" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1)
         if [ -n "$PID" ]; then
-          echo "  Killing PID $PID on port $PORT"
+          echo "Killing stale PID $PID on port $PORT"
           kill -9 "$PID" 2>/dev/null || true
         fi
       done
-    - sleep 2
-    # Verify ports are free
-    - |
-      for PORT in 8080 50051; do
-        if ss -tlnp "sport = :$PORT" 2>/dev/null | grep -q LISTEN; then
-          echo "WARNING: port $PORT is STILL in use after cleanup!"
-          ss -tlnp "sport = :$PORT"
-        else
-          echo "Port $PORT is free ✓"
-        fi
-      done
+    - sleep 1
 
     # ── 1. Start the orchestrator (memory storage for CI, no postgres needed)
     - echo "=== Starting DVF Orchestrator (memory storage) ==="
