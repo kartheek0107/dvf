@@ -380,7 +380,9 @@ deploy-share:
         echo "Install with: sudo dnf install -y pocl"
       fi
 
-    # ── 10. Final share layout ─────────────────────────────────────────────
+    # ── 10. Configure Relative Symlinks & Final share layout ────────────────
+    - echo "=== Configuring relative symlinks ==="
+    - bash scripts/setup_relative_symlinks.sh "${SHARE_DIR}"
     - echo "=== Share deployment complete ==="
     - ls -la "${SHARE_DIR}/"
     - echo "=== Per-test lib/ contents ==="
@@ -445,12 +447,13 @@ orchestrate-validation:
       done
     - sleep 1
 
-    # ── 1. Start the orchestrator (memory storage for CI, no postgres needed)
-    - echo "=== Starting DVF Orchestrator (memory storage) ==="
+    # ── 1. Start PostgreSQL (if podman container available) & Orchestrator ────
+    - echo "=== Starting DVF Orchestrator (PostgreSQL storage) ==="
     - |
+      podman start dvf-postgres 2>/dev/null || true
       ./go-orchestrator/orchestrator \
         --config "$DVF_CONFIG_DIR" \
-        --storage memory \
+        --storage postgres \
         > orchestrator.log 2>&1 &
       ORCHESTRATOR_PID=$!
       echo "Orchestrator PID: $ORCHESTRATOR_PID"

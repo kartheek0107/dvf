@@ -289,8 +289,12 @@ else
   warn "PoCL not installed — OpenCL tests will fail. Install with: sudo dnf install -y pocl"
 fi
 
-# ── Step 9: Summary ───────────────────────────────────────────────────────────
-step "10/10 Deployment summary"
+# ── Step 9: Configure Relative Symlinks ───────────────────────────────────────
+step "10/11 Configuring relative symlinks for 9p share"
+bash "${DVF_ROOT}/scripts/setup_relative_symlinks.sh" "${SHARE_DIR}"
+
+# ── Step 10: Summary ───────────────────────────────────────────────────────────
+step "11/11 Deployment summary"
 echo ""
 echo "  Share root:"
 ls -lh "${SHARE_DIR}/" | tail -10
