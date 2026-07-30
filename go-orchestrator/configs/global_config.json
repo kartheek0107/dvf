@@ -13,8 +13,8 @@
     "default_memory_mb": 1024,
     "default_cpus": 2,
     "vm_image_dir": "$DVF_ROOT/builds/qemu-build/tmp/images",
-    "socket_dir": "$DVF_ROOT/builds/qemu-build/tmp/qmp",
-    "serial_socket_dir": "$DVF_ROOT/builds/qemu-build/tmp/serial"
+    "socket_dir": "/tmp/dvf/qmp",
+    "serial_socket_dir": "/tmp/dvf/serial"
   },
   "fpga": {
     "vfio_group_path": "/dev/vfio",
