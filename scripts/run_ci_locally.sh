@@ -24,7 +24,7 @@ ORCHESTRATOR_PID=$!
 # 2. Wait for the orchestrator REST API to become ready
 echo "Waiting for orchestrator to start..."
 for i in {1..30}; do
-    if curl -s http://localhost:8080/healthz > /dev/null; then
+    if curl -s http://localhost:9080/healthz > /dev/null; then
         echo "Orchestrator is ready!"
         break
     fi

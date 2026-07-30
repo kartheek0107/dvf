@@ -444,4 +444,4 @@ bash scripts/deploy_share.sh --skip-vishwa-build --skip-driver-build
 | Deploy script | `scripts/deploy_share.sh` |
 | Bundle script | `scripts/bundle_libs.sh` |
 | Manual VM script | `scripts/manual_test_vm.sh` |
-| Orchestrator API | `http://localhost:8080/api/v1/` |
+| Orchestrator API | `http://localhost:9080/api/v1/` |

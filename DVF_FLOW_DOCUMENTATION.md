@@ -447,7 +447,7 @@ The DVF testing framework is fully integrated into a GitLab CI/CD pipeline to au
                ├─► Installs curl and git
                ├─► Starts go-orchestrator in background:
                │     ./go-orchestrator/orchestrator --config go-orchestrator/configs --storage memory &
-               ├─► Polls REST API healthcheck http://localhost:8080/healthz until healthy (up to 30s)
+               ├─► Polls REST API healthcheck http://localhost:9080/healthz until healthy (up to 30s)
                ├─► Runs scripts/ci_impact_analyzer.py (without --dry-run):
                │     ├─► Performs git diff against master branch to find changed files
                │     ├─► Parses test-suites/**/*.json sidecar dependency files

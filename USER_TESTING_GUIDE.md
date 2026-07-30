@@ -67,7 +67,7 @@ Create a folder under the host's `test-suites/` directory (e.g., `test-suites/my
    ```
 2. Trigger the validation run by sending an HTTP POST request:
    ```bash
-   curl -X POST http://localhost:8080/api/v1/test-runs \
+   curl -X POST http://localhost:9080/api/v1/test-runs \
      -H "Content-Type: application/json" \
      -d '{
        "device_id": "my-custom-accel",
@@ -229,19 +229,19 @@ Once you have triggered a test run, you can monitor, query, and fetch its result
 ### 4.1 Check Test Run Status
 To see whether your run is queued, running, passed, or failed:
 ```bash
-curl http://localhost:8080/api/v1/test-runs/YOUR_TEST_RUN_ID
+curl http://localhost:9080/api/v1/test-runs/YOUR_TEST_RUN_ID
 ```
 
 ### 4.2 Fetch Detailed Test Assertion Results
 To fetch the individual test cases, durations, logs, and custom metrics returned by your test binaries:
 ```bash
-curl http://localhost:8080/api/v1/test-runs/YOUR_TEST_RUN_ID/results
+curl http://localhost:9080/api/v1/test-runs/YOUR_TEST_RUN_ID/results
 ```
 
 ### 4.3 Cancel an In-Progress Test Run
 If you need to stop a test run:
 ```bash
-curl -X POST http://localhost:8080/api/v1/test-runs/YOUR_TEST_RUN_ID/cancel -d '{}'
+curl -X POST http://localhost:9080/api/v1/test-runs/YOUR_TEST_RUN_ID/cancel -d '{}'
 ```
 
 ---
@@ -260,7 +260,7 @@ The CI pipeline (`.gitlab-ci.yml`) is split into three automated stages:
    - Gathers the driver module, guest agent scripts, python venv dependencies, and Vishwa tests, and copies them to the host's QEMU 9p share directory (`/home/kartheekbudime/qemu-rootfs/share`).
 3. **`test`**:
    - Spins up the Go Orchestrator daemon in the background (`--storage memory`).
-   - Polls the `/healthz` endpoint on port 8080 until the orchestrator is healthy.
+   - Polls the `/healthz` endpoint on port 9080 until the orchestrator is healthy.
    - Executes the DVF CI Impact Analyzer (`scripts/ci_impact_analyzer.py`).
    - Cleanly terminates the background orchestrator daemon and exits with the test suite's exit code.
 
