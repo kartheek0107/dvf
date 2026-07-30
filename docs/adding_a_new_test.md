@@ -77,11 +77,14 @@ bundle_test "${SHARE_DIR}/vishwa_tests/regression/my_new_test/my_new_test"
 
 ### Step 4 — Deploy locally and verify
 
-Run the deploy script to push everything to the share:
+Run the deploy script to push everything to the share (relative symlinks are automatically configured via `scripts/setup_relative_symlinks.sh` during deploy):
 
 ```bash
 cd ~/driver-validation-suite
 bash scripts/deploy_share.sh --skip-driver-build --skip-vishwa-build
+
+# Or run the symlink shortcut script standalone if modifying symlinks manually:
+bash scripts/setup_relative_symlinks.sh
 ```
 
 Then verify inside the VM manually:
@@ -112,10 +115,10 @@ cat /tmp/stdout.txt
 cat /tmp/stderr.txt
 ```
 
-### Step 6 — Run through the orchestrator
+### Step 6 — Run through the orchestrator and view logs
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/test-runs \
+curl -X POST http://localhost:9080/api/v1/test-runs \
   -H "Content-Type: application/json" \
   -d '{
     "device_id": "gpgpu",
@@ -125,9 +128,13 @@ curl -X POST http://localhost:8080/api/v1/test-runs \
   }'
 ```
 
-Watch the result:
+Watch the result via the REST API or using the PostgreSQL log viewer:
 ```bash
-curl http://localhost:8080/api/v1/test-runs/<id-from-above>
+# View result in PostgreSQL:
+python3 scripts/view_pg_logs.py --failed
+
+# Or via API:
+curl http://localhost:9080/api/v1/test-runs/<id-from-above>
 ```
 
 ### Step 7 — Commit and push

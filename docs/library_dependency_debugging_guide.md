@@ -250,6 +250,11 @@ During real-world setup and validation, several minor and transient issues frequ
   cp -L /usr/lib64/libfoo.so.1 /path/to/share/lib/
   ```
 
+### F2. Mandatory Relative Symlinks Across 9p Mounts
+* **Problem:** Symlinks created using host absolute paths (e.g., `/home/kartheekbudime/...`) fail inside the QEMU VM with `File Not Found` (`ENOENT`) because `/home/kartheekbudime/...` does not exist inside the VM (where the share is mounted at `/mnt/share`).
+* **Fix:** All symlinks inside test `lib/` and `share/` folders must use **relative paths** (`../../../lib/pocl`, `../../share`, etc.).
+* **Shortcut Script:** Run `bash scripts/setup_relative_symlinks.sh` to automatically convert and configure all per-test symlinks to relative paths. (This is also automatically called by `scripts/deploy_share.sh` and CI pipeline).
+
 ### G. `$ORIGIN` Path Resolution Failure over 9p Filesystems
 * **Problem:** The binary compiles fine with `-Wl,-rpath,'$ORIGIN/lib'` and runs locally, but running `/mnt/share/test/binary` inside the VM throws `cannot open shared object file: No such file or directory` even though `lib/` is present.
 * **Fix:** The guest kernel's dynamic linker resolves `$ORIGIN` relative to `/proc/self/exe`. On some 9p filesystem implementations, this resolution fails. The DVF python-agent solves this at runtime by explicitly setting the absolute guest directory using `LD_LIBRARY_PATH` (or explicitly passing it to the host linker).
