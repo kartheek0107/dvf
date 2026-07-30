@@ -127,7 +127,19 @@ func (m *VMManager) BuildQEMUArgs(vmID string, vmCfg *VMConfig) []string {
 	// can create it before calling BuildQEMUArgs.
 	overlayPath := filepath.Join("/tmp/dvf/overlays", vmID+".qcow2")
 
+	// QEMU data directory (BIOS ROMs, firmware, keymaps).  When QEMU is built
+	// from source and the binary is copied away from its install prefix, it
+	// cannot find bios-256k.bin etc.  -L tells it where to look.
+	dataDir := qCfg.DataDir
+	if dataDir == "" {
+		// Derive from binary path: <prefix>/bin/qemu-system-x86_64 → <prefix>/share/qemu
+		dataDir = filepath.Join(filepath.Dir(filepath.Dir(qCfg.BinaryPath)), "share", "qemu")
+	}
+
 	args := []string{
+		// BIOS / firmware data directory
+		"-L", dataDir,
+
 		// Machine type: q35 is required for MSI-X support (real GPGPU driver
 		// uses pci_enable_msix_exact which fails on the default i440fx machine).
 		"-machine", "q35",

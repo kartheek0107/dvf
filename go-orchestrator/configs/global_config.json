@@ -6,6 +6,7 @@
   },
   "qemu": {
     "binary_path": "$DVF_ROOT/builds/qemu/qemu-system-x86_64",
+    "data_dir": "$DVF_ROOT/builds/qemu-build/installed/share/qemu",
     "kernel_path": "$HOME/VirtualMachines/linux/arch/x86/boot/bzImage",
     "rootfs_path": "$HOME/qemu-rootfs/rootfs.ext4",
     "share_dir": "$HOME/qemu-rootfs/share",

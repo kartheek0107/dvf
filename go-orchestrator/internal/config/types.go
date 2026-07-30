@@ -24,6 +24,7 @@ type ServerConfig struct {
 // QEMUConfig defines QEMU binary and VM infrastructure paths.
 type QEMUConfig struct {
 	BinaryPath      string `json:"binary_path"`
+	DataDir         string `json:"data_dir"`
 	KernelPath      string `json:"kernel_path"`
 	RootFSPath      string `json:"rootfs_path"`
 	ShareDir        string `json:"share_dir"`
