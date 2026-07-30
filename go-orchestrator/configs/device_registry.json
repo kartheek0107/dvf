@@ -22,14 +22,17 @@
         "PATH":             "/mnt/share/vishwa_tests/bin:/bin:/usr/bin"
       },
       "test_suites": [
+        "abctest/test",
+        "smoke",
+        "regression",
+        "stress",
         "vishwa/regression/vecaddx",
         "vishwa/opencl/vecadd",
         "vishwa/opencl/vecadd2",
         "vishwa/opencl/ai_predict",
         "vishwa/opencl/blur",
         "vishwa/opencl/gray",
-        "vishwa/opencl/sgemm",
-        "abctest/test"
+        "vishwa/opencl/sgemm"
       ]
     },
     {
