@@ -24,6 +24,8 @@ static atomic_int g_errors = 0;
 
 /* --- Writer/Reader race --- */
 
+// testing 
+
 static void *writer_func(void *arg) {
     (void)arg;
     int fd = dvf_open_device(&g_cfg, O_RDWR);
