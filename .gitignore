@@ -81,3 +81,8 @@ docker-compose.override.yml
 *.tmp
 builds/
 gitlab-runner/
+
+# --- QEMU source (external embedded git repo — never track) ---
+qemu-src/
+ /qemu-src
+builds/qemu-build/
