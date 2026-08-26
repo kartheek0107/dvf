@@ -276,7 +276,8 @@ deploy-share:
       TESTS_SRC="${VISHWA_CODE_DIR}/vishwa_hw_testing_env/tests"
       cp_asset() {
         src="$1"; dst="$2"
-        [ -f "$src" ] && cp "$src" "$dst" && echo "  Asset: $(basename $src)"
+        if [ -f "$src" ]; then cp "$src" "$dst" && echo "  Asset: $(basename $src)";
+        else echo "  SKIP asset: $(basename $src) not found"; fi
       }
       cp_asset "${TESTS_SRC}/opencl/vecadd/kernel.cl"         "${SHARE_DIR}/vishwa_tests/opencl/vecadd/"
       cp_asset "${TESTS_SRC}/opencl/vecadd2/kernel.cl"        "${SHARE_DIR}/vishwa_tests/opencl/vecadd2/"
