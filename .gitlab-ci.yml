@@ -40,12 +40,12 @@ variables:
   # ── CDAC / Vishwa source paths (on the CI runner) ──────────────────────────
   # These are runner-specific external paths.  Override in GitLab CI/CD
   # Settings → Variables if your runner's layout differs.
-  VISHWA_CODE_DIR: "/home/kartheekbudime/Downloads/CDAC/FW_SW_Milestone_2/code"
+  VISHWA_CODE_DIR: "$HOME/cdac/FW_SW_Milestone_2/code"
 
   # ── Kernel source for driver compilation ────────────────────────────────────
   # Path to the Linux kernel source tree (needed to compile .ko driver modules).
   # This is NOT QEMU — it is the OS kernel headers for `make -C driver-source/`.
-  KERNEL_BUILD_DIR: "/home/kartheekbudime/VirtualMachines/linux"
+  KERNEL_BUILD_DIR: "$HOME/VirtualMachines/linux"
 
   # ── DVF repo root (used by global_config.json to resolve binary_path) ─────
   # Set to the checked-out project directory on the runner.
