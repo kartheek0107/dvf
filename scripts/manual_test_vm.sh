@@ -9,10 +9,11 @@
 
 set -euo pipefail
 
-QEMU_BIN="$HOME/VirtualMachines/qemu_bin/bin/qemu-system-x86_64"
-KERNEL="$HOME/VirtualMachines/linux/arch/x86/boot/bzImage"
-ROOTFS="$HOME/qemu-rootfs/rootfs.ext4"
-SHARE_DIR="$HOME/qemu-rootfs/share"
+DVF_ROOT="${DVF_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+QEMU_BIN="${DVF_ROOT}/builds/qemu/qemu-system-x86_64"
+KERNEL="${KERNEL_BUILD_DIR:-$HOME/VirtualMachines/linux}/arch/x86/boot/bzImage"
+ROOTFS="${ROOTFS_PATH:-$HOME/qemu-rootfs/rootfs.ext4}"
+SHARE_DIR="${SHARE_DIR:-$HOME/qemu-rootfs/share}"
 
 VM_ID="manual-test-$(date +%s)"
 OVERLAY="/tmp/dvf-manual/${VM_ID}.qcow2"
