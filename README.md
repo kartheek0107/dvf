@@ -81,14 +81,51 @@ driver-validation-suite/
 
 ## 3. Getting Started
 
-### 3.1 Prerequisites
-*   Go 1.22 or higher
-*   Python 3.8+
-*   PostgreSQL & Redis (can be spun up via Docker Compose)
-*   QEMU / KVM (for virtualization)
+### 3.1 Quick Start (automated)
 
-### 3.2 Running the Orchestrator
-1. Spin up the background databases:
+The fastest way to set up DVF on a fresh machine:
+
+```bash
+git clone <your-remote-url> driver-validation-suite
+cd driver-validation-suite
+cp .env.example .env          # review and edit paths if needed
+bash scripts/bootstrap.sh     # installs everything, ~30 min first time
+```
+
+The bootstrap script is idempotent — re-run it safely at any time.
+Use `--skip-kernel`, `--skip-qemu`, `--skip-rootfs`, `--skip-vishwa`,
+or `--skip-packages` to skip individual steps.
+
+### 3.2 Prerequisites (system packages)
+
+| Category | Fedora / RHEL | Ubuntu / Debian |
+|---|---|---|
+| **Build tools** | `gcc gcc-c++ make git` | `gcc g++ make git` |
+| **Go** (1.22+) | `golang` | `golang-go` |
+| **Python** (3.8+) | `python3 python3-pip` | `python3 python3-pip` |
+| **QEMU build deps** | `ninja-build meson pkg-config glib2-devel pixman-devel zlib-devel` | `ninja-build meson pkg-config libglib2.0-dev libpixman-1-dev zlib1g-dev` |
+| **Runtime** | `qemu-img rsync curl` | `qemu-utils rsync curl` |
+| **Containers** | `docker docker-compose` | `docker.io docker-compose` |
+| **OpenCL** (optional) | `pocl ocl-icd` | `pocl-opencl-icd` |
+| **Guest image** | [Packer](https://developer.hashicorp.com/packer/install) | [Packer](https://developer.hashicorp.com/packer/install) |
+| **KVM** | `/dev/kvm` must be accessible | `/dev/kvm` must be accessible |
+
+### 3.3 External Dependencies (not in git)
+
+These must be built or obtained separately — they are too large or proprietary to commit:
+
+| Dependency | How to get it | Default path |
+|---|---|---|
+| **Linux kernel source** | `git clone --depth=1 --branch v6.6 https://github.com/torvalds/linux` then `make defconfig && make -j$(nproc)` | `$HOME/VirtualMachines/linux` |
+| **Custom QEMU** (with `gp_gpu` device) | `bash qemu-accelerator-models/scripts/build_qemu_with_models.sh` | `$DVF_ROOT/builds/qemu/qemu-system-x86_64` |
+| **Guest rootfs** (`rootfs.ext4`) | `cd guest-os && make build && make install` | `$HOME/qemu-rootfs/rootfs.ext4` |
+| **CDAC / Vishwa source** (optional) | Obtain from CDAC — proprietary IP | `$HOME/cdac/FW_SW_Milestone_2/code` |
+
+> **Tip**: Copy `.env.example` → `.env` and set paths to match your machine layout.
+
+### 3.4 Running the Orchestrator
+
+1. Start the background databases:
    ```bash
    docker-compose up -d
    ```
@@ -97,17 +134,19 @@ driver-validation-suite/
    cd go-orchestrator
    go build -o orchestrator ./cmd/orchestrator
    ```
-3. Run the orchestrator with local config files:
+3. Run the orchestrator:
    ```bash
+   export DVF_ROOT=$(pwd)/..
    ./orchestrator --config configs --storage postgres
    ```
 
-### 3.3 Running Unit Tests
-Execute the entire test suite of the control plane:
+### 3.5 Running Unit Tests
+
 ```bash
-cd go-orchestrator
-go test ./...
+cd go-orchestrator && go test ./...                                    # Go
+python3 -m unittest discover -s python-agent/tests -p "test_*.py" -v  # Python
 ```
+
 
 ---
 
