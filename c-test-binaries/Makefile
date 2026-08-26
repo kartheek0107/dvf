@@ -33,7 +33,7 @@ TESTS := \
 	abctest/test
 
 # Default share directory (override with: make install SHARE_DIR=...)
-SHARE_DIR ?= /home/kartheekbudime/qemu-rootfs/share
+SHARE_DIR ?= $(HOME)/qemu-rootfs/share
 
 .PHONY: all clean install list
 
