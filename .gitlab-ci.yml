@@ -40,12 +40,9 @@ variables:
   # ── CDAC / Vishwa source paths (on the CI runner) ──────────────────────────
   # These are runner-specific external paths.  Override in GitLab CI/CD
   # Settings → Variables if your runner's layout differs.
-  VISHWA_CODE_DIR: "$HOME/cdac/FW_SW_Milestone_2/code"
-
-  # ── Kernel source for driver compilation ────────────────────────────────────
-  # Path to the Linux kernel source tree (needed to compile .ko driver modules).
-  # This is NOT QEMU — it is the OS kernel headers for `make -C driver-source/`.
-  KERNEL_BUILD_DIR: "$HOME/VirtualMachines/linux"
+  # NOTE: $HOME is NOT available in this block (GitLab expands variables before
+  # the shell runs).  Each job resolves defaults in its script section instead.
+  # Set VISHWA_CODE_DIR and KERNEL_BUILD_DIR in GitLab CI/CD → Variables.
 
   # ── DVF repo root (used by global_config.json to resolve binary_path) ─────
   # Set to the checked-out project directory on the runner.
@@ -121,12 +118,13 @@ build-driver:
     - dvf-runner
   script:
     - echo "=== Building CDAC GPGPU PCIe driver ==="
+    - KERNEL_BUILD_DIR="${KERNEL_BUILD_DIR:-$HOME/VirtualMachines/linux}"
     - |
       if [ -d "$KERNEL_BUILD_DIR" ]; then
         make -C driver-source/gpgpu_driver KDIR="$KERNEL_BUILD_DIR" -j4
       else
         echo "ERROR: Kernel build directory not found at $KERNEL_BUILD_DIR"
-        echo "Set KERNEL_BUILD_DIR to the path of your kernel source tree."
+        echo "Set KERNEL_BUILD_DIR in GitLab CI/CD → Settings → Variables."
         exit 1
       fi
     - ls -lh driver-source/gpgpu_driver/gpgpu_pcie_ep_driver.ko
@@ -194,9 +192,15 @@ deploy-share:
       mkdir -p "${SHARE_DIR}/python-agent"
       mkdir -p "${SHARE_DIR}/dvf_tests"
 
-    # ── 1. Deploy the GPGPU driver ─────────────────────────────────────────
+    # ── 1. Deploy the GPGPU driver (may be absent if build-driver failed) ──
     - echo "=== Deploying GPGPU driver ==="
-    - cp driver-source/gpgpu_driver/gpgpu_pcie_ep_driver.ko "${SHARE_DIR}/"
+    - |
+      if [ -f driver-source/gpgpu_driver/gpgpu_pcie_ep_driver.ko ]; then
+        cp driver-source/gpgpu_driver/gpgpu_pcie_ep_driver.ko "${SHARE_DIR}/"
+        echo "Driver .ko deployed."
+      else
+        echo "WARNING: gpgpu_pcie_ep_driver.ko not found (build-driver may have failed) — skipping."
+      fi
 
     # ── 2. Deploy the Python agent ─────────────────────────────────────────
     - echo "=== Deploying DVF agent ==="
@@ -220,13 +224,14 @@ deploy-share:
     # write access to the CDAC source tree.  Pre-built artifacts are used if
     # the build step fails or is skipped.
     - echo "=== Building Vishwa runtime and tests ==="
+    - VISHWA_CODE_DIR="${VISHWA_CODE_DIR:-$HOME/cdac/FW_SW_Milestone_2/code}"
     - |
       if [ -f "${VISHWA_CODE_DIR}/vishwa_hw_testing_env/vishwa_run.sh" ]; then
         cd "${VISHWA_CODE_DIR}/vishwa_hw_testing_env"
         bash vishwa_run.sh || echo "WARNING: Vishwa build failed (non-fatal) — using pre-built artifacts if available"
         cd "$CI_PROJECT_DIR"
       else
-        echo "INFO: Vishwa source not found — skipping (using pre-built artifacts if present)"
+        echo "INFO: Vishwa source not found at ${VISHWA_CODE_DIR} — skipping"
       fi
 
     # ── 4. Deploy Vishwa runtime libraries ────────────────────────────────
