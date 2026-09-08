@@ -81,22 +81,49 @@ step "1/8  System packages"
 if $SKIP_PACKAGES; then
     warn "Skipping (--skip-packages)"
 else
+    IS_ROOT=false
+    HAS_SUDO=false
+    if [ "$(id -u)" -eq 0 ]; then
+        IS_ROOT=true
+    elif command -v sudo &>/dev/null && sudo -v &>/dev/null 2>&1; then
+        HAS_SUDO=true
+    fi
+
     # Detect package manager
     if command -v dnf &>/dev/null; then
-        PKG_MGR="dnf"
         echo "  Detected: Fedora / RHEL / CentOS (dnf)"
-        sudo dnf install -y \
-            gcc gcc-c++ make git python3 python3-pip golang \
-            ninja-build meson pkg-config glib2-devel pixman-devel zlib-devel \
-            qemu-img rsync curl
+        if $IS_ROOT; then
+            dnf install -y \
+                gcc gcc-c++ make git python3 python3-pip golang \
+                ninja-build meson pkg-config glib2-devel pixman-devel zlib-devel \
+                qemu-img rsync curl
+        elif $HAS_SUDO; then
+            sudo dnf install -y \
+                gcc gcc-c++ make git python3 python3-pip golang \
+                ninja-build meson pkg-config glib2-devel pixman-devel zlib-devel \
+                qemu-img rsync curl
+        else
+            warn "No root/sudo privileges detected. Skipping dnf package installation."
+            warn "Ensure required tools (gcc, make, go 1.22+, python3, ninja, meson, qemu-img) are loaded via environment modules or local binaries."
+        fi
     elif command -v apt-get &>/dev/null; then
-        PKG_MGR="apt"
         echo "  Detected: Ubuntu / Debian (apt)"
-        sudo apt-get update
-        sudo apt-get install -y \
-            gcc g++ make git python3 python3-pip golang-go \
-            ninja-build meson pkg-config libglib2.0-dev libpixman-1-dev \
-            zlib1g-dev qemu-utils rsync curl
+        if $IS_ROOT; then
+            apt-get update
+            apt-get install -y \
+                gcc g++ make git python3 python3-pip golang-go \
+                ninja-build meson pkg-config libglib2.0-dev libpixman-1-dev \
+                zlib1g-dev qemu-utils rsync curl
+        elif $HAS_SUDO; then
+            sudo apt-get update
+            sudo apt-get install -y \
+                gcc g++ make git python3 python3-pip golang-go \
+                ninja-build meson pkg-config libglib2.0-dev libpixman-1-dev \
+                zlib1g-dev qemu-utils rsync curl
+        else
+            warn "No root/sudo privileges detected. Skipping apt package installation."
+            warn "Ensure required tools (gcc, make, go 1.22+, python3, ninja, meson, qemu-img) are loaded via environment modules or local binaries."
+        fi
     else
         warn "Unknown package manager — install manually: gcc, make, go, python3, ninja, meson, qemu-img"
     fi
@@ -104,11 +131,13 @@ else
     # Ensure /dev/kvm is accessible
     if [ -c /dev/kvm ]; then
         ok "KVM available"
-        if ! groups | grep -q kvm; then
-            warn "Current user is not in 'kvm' group. Run: sudo usermod -aG kvm \$USER && newgrp kvm"
+        if [ -w /dev/kvm ]; then
+            ok "/dev/kvm is writable by current user ($USER)"
+        elif ! groups | grep -q kvm; then
+            warn "Current user is not in 'kvm' group. Ask sysadmin: sudo usermod -aG kvm \$USER (or use setfacl -m u:\$USER:rw /dev/kvm)"
         fi
     else
-        warn "/dev/kvm not found — VM tests require KVM. Enable virtualisation in BIOS."
+        warn "/dev/kvm not found — VM tests require KVM or hardware virtualisation."
     fi
 fi
 
@@ -127,13 +156,16 @@ if command -v docker &>/dev/null || command -v podman &>/dev/null; then
     fi
 
     if [ -n "$COMPOSE_CMD" ]; then
-        $COMPOSE_CMD -f "${DVF_ROOT}/docker-compose.yml" up -d
-        ok "Postgres + Redis started via $COMPOSE_CMD"
+        if $COMPOSE_CMD -f "${DVF_ROOT}/docker-compose.yml" up -d 2>/dev/null; then
+            ok "Postgres + Redis started via $COMPOSE_CMD"
+        else
+            warn "Failed to run $COMPOSE_CMD up -d (no daemon permission?). Defaulting to in-memory mode (DVF_STORAGE=memory)."
+        fi
     else
-        warn "docker-compose / podman-compose not found — start Postgres+Redis manually"
+        warn "docker-compose / podman-compose not found — default to in-memory mode (DVF_STORAGE=memory)."
     fi
 else
-    warn "Docker/Podman not installed. Install docker and docker-compose for Postgres+Redis."
+    warn "Docker/Podman not installed — default to in-memory mode (DVF_STORAGE=memory)."
 fi
 
 # =============================================================================

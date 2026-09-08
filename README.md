@@ -46,7 +46,21 @@ A lightweight, dependency-free guest agent written in Python 3.
 
 ---
 
-## 2. Directory Structure
+## 2. Documentation Guides
+
+Comprehensive documentation guides are available under the `docs/` directory:
+
+*   **[PARAM Utkarsh Server Setup Guide](docs/param_utkarsh_server_setup.md)** — Complete, beginner-friendly guide for deploying DVF on the PARAM Utkarsh HPC cluster without root/sudo, using environment modules, scratch storage, proxy configurations, and in-memory storage.
+*   **[Runner Host Setup Guide](docs/runner_host_setup.md)** — End-to-end setup guide for setting up a dedicated CI runner machine from scratch.
+*   **[Master Manual Operations Guide](docs/master_manual_guide.md)** — Guide for manual extension, test creation, QEMU device model additions, and library bundling.
+*   **[Adding a New Test](docs/adding_a_new_test.md)** — Step-by-step instructions for adding custom C/C++ or Vishwa OpenCL validation tests.
+*   **[Adding a QEMU Device Model](docs/adding_a_new_qemu_device_model.md)** — Guide to writing and registering new hardware device models.
+*   **[Library Dependency Debugging Guide](docs/library_dependency_debugging_guide.md)** — Troubleshooting guide for dynamic library bundling and 9p virtfs symlinks.
+*   **[Viewing and Debugging Logs](docs/viewing_and_debugging_logs.md)** — How to inspect PostgreSQL records, QEMU console logs, and orchestrator telemetry.
+
+---
+
+## 3. Directory Structure
 
 ```
 driver-validation-suite/
@@ -79,9 +93,9 @@ driver-validation-suite/
 
 ---
 
-## 3. Getting Started
+## 4. Getting Started
 
-### 3.1 Quick Start (automated)
+### 4.1 Quick Start (automated)
 
 The fastest way to set up DVF on a fresh machine:
 
@@ -96,7 +110,7 @@ The bootstrap script is idempotent — re-run it safely at any time.
 Use `--skip-kernel`, `--skip-qemu`, `--skip-rootfs`, `--skip-vishwa`,
 or `--skip-packages` to skip individual steps.
 
-### 3.2 Prerequisites (system packages)
+### 4.2 Prerequisites (system packages)
 
 | Category | Fedora / RHEL | Ubuntu / Debian |
 |---|---|---|
@@ -110,7 +124,7 @@ or `--skip-packages` to skip individual steps.
 | **Guest image** | [Packer](https://developer.hashicorp.com/packer/install) | [Packer](https://developer.hashicorp.com/packer/install) |
 | **KVM** | `/dev/kvm` must be accessible | `/dev/kvm` must be accessible |
 
-### 3.3 External Dependencies (not in git)
+### 4.3 External Dependencies (not in git)
 
 These must be built or obtained separately — they are too large or proprietary to commit:
 
@@ -123,7 +137,7 @@ These must be built or obtained separately — they are too large or proprietary
 
 > **Tip**: Copy `.env.example` → `.env` and set paths to match your machine layout.
 
-### 3.4 Running the Orchestrator
+### 4.4 Running the Orchestrator
 
 1. Start the background databases:
    ```bash
@@ -140,7 +154,7 @@ These must be built or obtained separately — they are too large or proprietary
    ./orchestrator --config configs --storage postgres
    ```
 
-### 3.5 Running Unit Tests
+### 4.5 Running Unit Tests
 
 ```bash
 cd go-orchestrator && go test ./...                                    # Go
@@ -150,7 +164,7 @@ python3 -m unittest discover -s python-agent/tests -p "test_*.py" -v  # Python
 
 ---
 
-## 4. REST APIs
+## 5. REST APIs
 
 *   `GET /healthz` - Check API server liveness
 *   `GET /readyz` - Check storage & network readiness
@@ -161,7 +175,7 @@ python3 -m unittest discover -s python-agent/tests -p "test_*.py" -v  # Python
 
 ---
 
-## 5. CI/CD Automation Pipeline
+## 6. CI/CD Automation Pipeline
 
 DVF features automated continuous integration pipelines via GitLab CI (`.gitlab-ci.yml`). On every push to the repository:
 1. **Go control plane & test binaries are built** and passed as artifacts.
